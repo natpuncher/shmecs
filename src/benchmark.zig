@@ -49,6 +49,8 @@ pub fn main(init: std.process.Init) !void {
     try benchmarkTraversal(init.io, 16, true);
     try benchmarkSpawn(init.io, false);
     try benchmarkSpawn(init.io, true);
+    try benchmarkDeferredSpawn(init.io, false);
+    try benchmarkDeferredSpawn(init.io, true);
     try benchmarkLookup(init.io, false, false);
     try benchmarkLookup(init.io, true, false);
     try benchmarkLookup(init.io, true, true);
@@ -270,6 +272,51 @@ fn benchmarkSpawn(io: std.Io, comptime reserved: bool) !void {
         nanoseconds / entity_count,
         nanoseconds / 1_000_000,
     });
+}
+
+fn benchmarkDeferredSpawn(io: std.Io, comptime warmed: bool) !void {
+    const ids = try allocator.alloc(shmecs.ThingId, entity_count);
+    defer allocator.free(ids);
+    var timings: [sample_count]u64 = undefined;
+
+    for (0..sample_count + 1) |sample| {
+        var store = AccessStore.init(allocator);
+        defer store.deinit();
+
+        if (warmed) {
+            spawnDuringIteration(&store, ids);
+            store.clear(Entity(0));
+        }
+
+        const start = std.Io.Clock.awake.now(io);
+        spawnDuringIteration(&store, ids);
+        std.mem.doNotOptimizeAway(&store);
+        const duration = elapsed(io, start);
+
+        if (store.count(Entity(0)) != entity_count) return error.InvalidDeferredSpawnCount;
+
+        for (ids, 0..) |id, index| {
+            const thing = store.get(Entity(0), id) orelse return error.MissingDeferredSpawn;
+
+            if (thing.motion.x != initialMotion(index).x or thing.health.current != 100)
+                return error.InvalidDeferredSpawnComponents;
+        }
+
+        if (sample != 0) timings[sample - 1] = duration;
+    }
+
+    const nanoseconds: f64 = @floatFromInt(median(timings));
+
+    std.debug.print("spawn/deferred/{s}: {d:.3} ns/entity, {d:.3} ms/batch (queue and commit)\n", .{
+        if (warmed) "reused buffers" else "cold", nanoseconds / entity_count, nanoseconds / 1_000_000,
+    });
+}
+
+noinline fn spawnDuringIteration(store: *AccessStore, ids: []shmecs.ThingId) void {
+    var things = store.things(Entity(0));
+    defer things.deinit();
+
+    for (0..ids.len) |index| ids[index] = store.add(initialEntity(Entity(0), index));
 }
 
 const AccessStore = shmecs.Store(.{Entity(0)});
