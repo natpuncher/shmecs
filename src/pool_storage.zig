@@ -17,6 +17,12 @@ pub fn PoolStorage(comptime Entity: type) type {
 
     return struct {
         const This = @This();
+        const PendingAddition = struct {
+            thing: Entity,
+            slot: u32,
+            generation: u32,
+            canceled: bool = false,
+        };
 
         pub const Iterator = ThingsIterator(This, Entity);
 
@@ -34,6 +40,8 @@ pub fn PoolStorage(comptime Entity: type) type {
         active_iterators: usize = 0,
         pending_removals: usize = 0,
         removal_end: usize = 0,
+        pending_additions: std.ArrayList(PendingAddition) = .empty,
+        pending_slots: std.ArrayList(Slot) = .empty,
 
         pub fn init(allocator: std.mem.Allocator) This {
             return .{ .allocator = allocator };
@@ -44,31 +52,34 @@ pub fn PoolStorage(comptime Entity: type) type {
 
             const pool_index = this.pool_index;
             this.allocator.free(this.memory);
+            this.pending_additions.deinit(this.allocator);
+            this.pending_slots.deinit(this.allocator);
             this.* = .init(this.allocator);
             this.pool_index = pool_index;
         }
 
         pub fn reserve(this: *This, capacity: usize) std.mem.Allocator.Error!void {
-            std.debug.assert(this.active_iterators == 0);
+            if (this.active_iterators != 0) @panic("Cannot reserve a pool with active iterators");
+
             if (capacity <= this.capacity) return;
 
             var replacement = try this.allocate(capacity);
             replacement.copyData(this);
 
-            this.allocator.free(this.memory);
-            this.* = replacement;
+            this.replace(replacement);
         }
 
         pub fn copyFrom(this: *This, source: *const This) std.mem.Allocator.Error!void {
-            std.debug.assert(this.active_iterators == 0 and source.active_iterators == 0);
+            if (this.active_iterators != 0 or source.active_iterators != 0)
+                @panic("Cannot copy pools with active iterators");
+
             if (this == source) return;
 
             if (source.slot_count > this.capacity) {
                 var replacement = try this.allocate(try this.growthCapacity(source.slot_count));
                 replacement.copyData(source);
 
-                this.allocator.free(this.memory);
-                this.* = replacement;
+                this.replace(replacement);
                 return;
             }
 
@@ -76,7 +87,7 @@ pub fn PoolStorage(comptime Entity: type) type {
         }
 
         pub fn append(this: *This, entity: Entity) std.mem.Allocator.Error!ThingId {
-            std.debug.assert(this.active_iterators == 0);
+            if (this.active_iterators != 0) return this.deferAppend(entity);
 
             if (this.free_slot == invalid_index and this.slot_count == this.capacity) {
                 const required = std.math.add(usize, this.slot_count, 1) catch return error.OutOfMemory;
@@ -92,6 +103,16 @@ pub fn PoolStorage(comptime Entity: type) type {
                 this.slot_count += 1;
             }
 
+            this.appendRow(entity, slot_index);
+
+            return .{
+                .pool = this.pool_index,
+                .slot = slot_index,
+                .generation = this.slots[slot_index].generation,
+            };
+        }
+
+        fn appendRow(this: *This, entity: Entity, slot_index: u32) void {
             const index = this.len;
 
             inline for (fields, 0..) |field, column_index| {
@@ -102,12 +123,6 @@ pub fn PoolStorage(comptime Entity: type) type {
             this.slots[slot_index].index = @intCast(index);
             this.dense_to_slot[index] = slot_index;
             this.len += 1;
-
-            return .{
-                .pool = this.pool_index,
-                .slot = slot_index,
-                .generation = this.slots[slot_index].generation,
-            };
         }
 
         pub fn indexOf(this: *const This, id: ThingId) ?usize {
@@ -121,7 +136,10 @@ pub fn PoolStorage(comptime Entity: type) type {
         }
 
         pub fn remove(this: *This, id: ThingId) void {
-            const index = this.indexOf(id) orelse return;
+            const index = this.indexOf(id) orelse {
+                this.cancelAddition(id);
+                return;
+            };
 
             if (this.active_iterators != 0) {
                 this.removal_flags[index] = true;
@@ -134,6 +152,8 @@ pub fn PoolStorage(comptime Entity: type) type {
         }
 
         pub fn clear(this: *This) void {
+            this.cancelAdditions();
+
             if (this.active_iterators == 0) {
                 this.removeAll();
                 return;
@@ -157,7 +177,86 @@ pub fn PoolStorage(comptime Entity: type) type {
             std.debug.assert(this.active_iterators != 0);
             this.active_iterators -= 1;
 
-            if (this.active_iterators == 0) this.flushRemovals();
+            if (this.active_iterators == 0) {
+                this.flushRemovals();
+
+                if (this.pending_additions.items.len != 0 or this.pending_slots.items.len != 0)
+                    this.flushAdditions() catch @panic("Out of memory");
+            }
+        }
+
+        noinline fn deferAppend(this: *This, entity: Entity) std.mem.Allocator.Error!ThingId {
+            if (this.pending_additions.items.len == invalid_index) return error.OutOfMemory;
+            if (this.free_slot == invalid_index and this.pending_slots.items.len >= invalid_index - this.slot_count)
+                return error.OutOfMemory;
+
+            try this.pending_additions.ensureUnusedCapacity(this.allocator, 1);
+
+            const slot_index: u32 = if (this.free_slot != invalid_index) this.free_slot else index: {
+                const next: u32 = @intCast(this.slot_count + this.pending_slots.items.len);
+                try this.pending_slots.append(this.allocator, .{ .index = invalid_index });
+                break :index next;
+            };
+            const slot = this.slotFor(slot_index).?;
+
+            if (this.free_slot != invalid_index) this.free_slot = slot.index;
+
+            slot.index = @intCast(this.pending_additions.items.len);
+            this.pending_additions.appendAssumeCapacity(.{
+                .thing = entity,
+                .slot = slot_index,
+                .generation = slot.generation,
+            });
+
+            return .{ .pool = this.pool_index, .slot = slot_index, .generation = slot.generation };
+        }
+
+        fn slotFor(this: *This, index: u32) ?*Slot {
+            if (index < this.slot_count) return &this.slots[index];
+
+            const pending_index = index - this.slot_count;
+            if (pending_index >= this.pending_slots.items.len) return null;
+
+            return &this.pending_slots.items[pending_index];
+        }
+
+        fn cancelAddition(this: *This, id: ThingId) void {
+            if (id.pool != this.pool_index or this.pending_additions.items.len == 0) return;
+
+            const slot = this.slotFor(id.slot) orelse return;
+            if (slot.generation != id.generation or slot.index >= this.pending_additions.items.len) return;
+
+            const addition = &this.pending_additions.items[slot.index];
+            if (addition.canceled or addition.slot != id.slot or addition.generation != id.generation) return;
+
+            addition.canceled = true;
+            this.free_slot = recycleSlot(slot, id.slot, this.free_slot);
+        }
+
+        fn cancelAdditions(this: *This) void {
+            for (this.pending_additions.items) |addition| {
+                if (!addition.canceled) {
+                    const slot = this.slotFor(addition.slot).?;
+                    this.free_slot = recycleSlot(slot, addition.slot, this.free_slot);
+                }
+            }
+
+            this.pending_additions.clearRetainingCapacity();
+        }
+
+        noinline fn flushAdditions(this: *This) std.mem.Allocator.Error!void {
+            const required = this.slot_count + this.pending_slots.items.len;
+            if (required > this.capacity) try this.reserve(try this.growthCapacity(required));
+
+            @memcpy(this.slots[this.slot_count..required], this.pending_slots.items);
+            this.slot_count = required;
+            this.pending_slots.clearRetainingCapacity();
+
+            for (this.pending_additions.items) |addition| {
+                if (!addition.canceled) this.appendRow(addition.thing, addition.slot);
+            }
+
+            this.pending_additions.clearRetainingCapacity();
         }
 
         fn flushRemovals(this: *This) void {
@@ -216,6 +315,15 @@ pub fn PoolStorage(comptime Entity: type) type {
             storage.dense_to_slot = dense_to_slot_pointer[0..capacity];
 
             return storage;
+        }
+
+        fn replace(this: *This, replacement: This) void {
+            const pending_additions = this.pending_additions;
+            const pending_slots = this.pending_slots;
+            this.allocator.free(this.memory);
+            this.* = replacement;
+            this.pending_additions = pending_additions;
+            this.pending_slots = pending_slots;
         }
 
         fn copyData(this: *This, source: *const This) void {

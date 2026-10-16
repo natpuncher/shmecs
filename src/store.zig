@@ -46,8 +46,8 @@ pub fn Store(comptime thing_types: anytype) type {
 
         pub fn copyFrom(this: *This, source: *const This) void {
             inline for (thing_types, 0..) |_, index| {
-                std.debug.assert(this.pools[index].active_iterators == 0);
-                std.debug.assert(source.pools[index].active_iterators == 0);
+                if (this.pools[index].active_iterators != 0 or source.pools[index].active_iterators != 0)
+                    @panic("Cannot copy stores with active iterators");
             }
 
             if (this == source) return;

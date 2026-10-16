@@ -25,7 +25,7 @@ Store
     metadata
 ```
 
-Each type uses one allocation; alignment and spare capacity are omitted above.
+Each type keeps its main arrays in one allocation; alignment and spare capacity are omitted above.
 Within a type, matching indices belong to the same thing. Each `Health` holds
 `{ current, maximum }` together; planes and buildings have separate health arrays.
 
@@ -79,8 +79,12 @@ immediately when its storage is free, or defers physical removal until the last 
 finishes. Removed things disappear from iterators and `get` immediately; repeated
 removal is harmless. No manual flush is needed.
 
+`add` returns an ID immediately. If that type has active iterators, the spawn is queued
+until its last iterator closes. Queued things are absent from `get`, `count`, and iteration;
+`remove(id)` cancels a queued spawn. Staging buffers are allocated on demand and reused.
+
 `store.clear(Bullet)` removes all things of one type using the same removal rules,
-invalidates their IDs, and keeps allocated capacity for reuse.
+also cancels queued spawns, invalidates their IDs, and keeps allocated capacity for reuse.
 `store.clearAll()` does this for every type. `store.deinit()` frees the allocations.
 
 `things` exposes `.len`, the stored row count when the iterator opens.
@@ -101,7 +105,8 @@ both stores to have no active iterators. Part values are copied; pointers and sl
 inside parts still refer to their original targets. Reacquire part pointers after restoring.
 
 - Full iteration closes automatically. Keep `defer iterator.deinit()` for early exits; cleanup on `break` happens when its enclosing scope ends.
-- Adding or reserving a type with active iterators is a programming error. `add`, `reserve`, and `copyFrom` panic on allocation failure.
+- Reserving a type or copying a store with active iterators panics in every build mode.
+- `add`, `reserve`, `copyFrom`, and applying queued spawns panic on allocation failure.
 - `count` excludes pending removals immediately.
 - Keep IDs for long-lived references; storage growth and removal can invalidate part pointers.
 - Part types within a thing must be unique. Do not copy stores by assignment or copy active iterators.

@@ -8,4 +8,5 @@ test {
     _ = @import("tests/things.zig");
     _ = @import("tests/clear.zig");
     _ = @import("tests/copy.zig");
+    _ = @import("tests/deferred_add.zig");
 }
