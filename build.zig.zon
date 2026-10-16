@@ -1,0 +1,12 @@
+.{
+    .name = .shmecs,
+    .version = "0.0.0",
+    .fingerprint = 0x95badcb70c8463e8,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
