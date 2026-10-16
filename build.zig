@@ -35,6 +35,22 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
+    const benchmark = b.addExecutable(.{
+        .name = "shmecs-benchmark",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/benchmark.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "shmecs", .module = mod },
+            },
+        }),
+    });
+
+    const benchmark_step = b.step("bench", "Run performance benchmarks in ReleaseFast");
+    const benchmark_cmd = b.addRunArtifact(benchmark);
+    benchmark_step.dependOn(&benchmark_cmd.step);
+
     const mod_tests = b.addTest(.{
         .root_module = mod,
     });

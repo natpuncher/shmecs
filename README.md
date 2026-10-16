@@ -65,3 +65,5 @@ and optional `reserve(capacity)`.
 Complete example: [src/main.zig](src/main.zig).
 
 Build: `zig build`. Run the example: `zig build run`.
+
+Benchmark: `zig build bench -Doptimize=ReleaseFast`.
