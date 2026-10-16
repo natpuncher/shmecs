@@ -49,6 +49,11 @@ pub fn main(init: std.process.Init) !void {
     try benchmarkTraversal(init.io, 16, true);
     try benchmarkSpawn(init.io, false);
     try benchmarkSpawn(init.io, true);
+    try benchmarkLookup(init.io, false, false);
+    try benchmarkLookup(init.io, true, false);
+    try benchmarkLookup(init.io, true, true);
+    try benchmarkChurn(init.io, 1);
+    try benchmarkChurn(init.io, 64);
     try benchmarkCopy(init.io, false);
     try benchmarkCopy(init.io, true);
 
@@ -264,6 +269,158 @@ fn benchmarkSpawn(io: std.Io, comptime reserved: bool) !void {
         if (reserved) "reserved (reserve excluded)" else "automatic growth",
         nanoseconds / entity_count,
         nanoseconds / 1_000_000,
+    });
+}
+
+const AccessStore = shmecs.Store(.{Entity(0)});
+const LookupResult = struct { sum: f64 = 0, hits: usize = 0 };
+
+noinline fn lookup(store: *AccessStore, ids: []const shmecs.ThingId) LookupResult {
+    std.mem.doNotOptimizeAway(store);
+    var result: LookupResult = .{};
+
+    for (ids) |id| {
+        if (store.get(Entity(0), id)) |thing| {
+            result.sum += thing.motion.x;
+            result.hits += 1;
+        }
+    }
+
+    return result;
+}
+
+fn benchmarkLookup(io: std.Io, comptime shuffled: bool, comptime stale: bool) !void {
+    const passes = 32;
+    const ids = try allocator.alloc(shmecs.ThingId, entity_count);
+    defer allocator.free(ids);
+    var timings: [sample_count]u64 = undefined;
+    var expected_sum: f64 = 0;
+    const expected_hits: usize = if (stale) entity_count / 2 else entity_count;
+
+    for (0..entity_count) |index| {
+        if (!stale or index % 2 != 0) expected_sum += initialMotion(index).x;
+    }
+
+    for (0..sample_count + 1) |sample| {
+        var store = AccessStore.init(allocator);
+        defer store.deinit();
+        store.reserve(Entity(0), entity_count);
+
+        for (0..ids.len) |index| ids[index] = store.add(initialEntity(Entity(0), index));
+
+        if (stale) {
+            for (ids, 0..) |id, index| {
+                if (index % 2 == 0) store.remove(id);
+            }
+        }
+
+        if (shuffled) {
+            var prng = std.Random.DefaultPrng.init(0x53484d454353);
+            prng.random().shuffle(shmecs.ThingId, ids);
+        }
+
+        const warmup = lookup(&store, ids);
+
+        if (warmup.sum != expected_sum or warmup.hits != expected_hits)
+            return error.InvalidLookupResult;
+
+        var result: LookupResult = .{};
+        const start = std.Io.Clock.awake.now(io);
+
+        for (0..passes) |_| {
+            const pass = lookup(&store, ids);
+            result.sum += pass.sum;
+            result.hits += pass.hits;
+        }
+
+        std.mem.doNotOptimizeAway(&result);
+        const duration = elapsed(io, start);
+
+        if (result.sum != expected_sum * passes or result.hits != expected_hits * passes)
+            return error.InvalidLookupResult;
+
+        if (sample != 0) timings[sample - 1] = duration;
+    }
+
+    const nanoseconds: f64 = @floatFromInt(median(timings));
+
+    std.debug.print("get/{s}/{s}: {d:.3} ns/lookup\n", .{
+        if (shuffled) "random" else "sequential",
+        if (stale) "half stale" else "live",
+        nanoseconds / entity_count / passes,
+    });
+}
+
+fn benchmarkChurn(io: std.Io, comptime batch_size: usize) !void {
+    const rounds = 8;
+    const ids = try allocator.alloc(shmecs.ThingId, entity_count);
+    defer allocator.free(ids);
+    const original_ids = try allocator.alloc(shmecs.ThingId, entity_count);
+    defer allocator.free(original_ids);
+    const order = try allocator.alloc(usize, entity_count);
+    defer allocator.free(order);
+
+    for (0..order.len) |index| order[index] = index;
+
+    var prng = std.Random.DefaultPrng.init(0x53484d454353);
+    prng.random().shuffle(usize, order);
+    var timings: [sample_count]u64 = undefined;
+
+    for (0..sample_count + 1) |sample| {
+        var store = AccessStore.init(allocator);
+        defer store.deinit();
+        store.reserve(Entity(0), entity_count);
+
+        for (0..ids.len) |index| ids[index] = store.add(initialEntity(Entity(0), index));
+
+        @memcpy(original_ids, ids);
+        const start = std.Io.Clock.awake.now(io);
+
+        for (0..rounds) |_| {
+            var first: usize = 0;
+
+            while (first < order.len) : (first += batch_size) {
+                var replacements: [batch_size]Entity(0) = undefined;
+                const selected = order[first..][0..batch_size];
+
+                for (selected, 0..) |index, offset| {
+                    const thing = store.get(Entity(0), ids[index]) orelse return error.MissingChurnThing;
+                    replacements[offset] = .{
+                        .motion = thing.motion.*,
+                        .health = thing.health.*,
+                        .cold = thing.cold.*,
+                    };
+                    replacements[offset].motion.x += 1;
+                    store.remove(ids[index]);
+                }
+
+                for (selected, 0..) |index, offset| ids[index] = store.add(replacements[offset]);
+            }
+        }
+
+        std.mem.doNotOptimizeAway(&store);
+        const duration = elapsed(io, start);
+
+        if (store.count(Entity(0)) != entity_count) return error.InvalidChurnCount;
+
+        for (ids, original_ids, 0..) |id, original, index| {
+            const thing = store.get(Entity(0), id) orelse return error.MissingChurnThing;
+
+            if (thing.motion.x != initialMotion(index).x + rounds or thing.motion.y != 0 or
+                thing.health.current != 100 or thing.cold.bytes[0] != @as(u8, @truncate(index)))
+                return error.InvalidChurnComponents;
+
+            if (id.generation != rounds + 1) return error.InvalidChurnGeneration;
+            if (store.get(Entity(0), original) != null) return error.StaleChurnIdStillVisible;
+        }
+
+        if (sample != 0) timings[sample - 1] = duration;
+    }
+
+    const nanoseconds: f64 = @floatFromInt(median(timings));
+
+    std.debug.print("churn/random/batch {d}: {d:.3} ns/replacement (get, update, remove, add)\n", .{
+        batch_size, nanoseconds / entity_count / rounds,
     });
 }
 
