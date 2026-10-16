@@ -316,6 +316,22 @@ test "capacity overflow fails without damaging existing entities" {
     try testing.expectEqualDeep(fixtures.plane(10), entity);
 }
 
+test "capacity beyond the index range is rejected before allocation" {
+    if (comptime @bitSizeOf(usize) > 32) {
+        var failing = testing.FailingAllocator.init(testing.allocator, .{});
+        var pool = PoolStorage(fixtures.Plane).init(failing.allocator());
+        defer pool.deinit();
+
+        const id = try pool.append(fixtures.plane(10));
+        const allocations = failing.alloc_index;
+        const capacity: usize = @as(usize, std.math.maxInt(u32)) + 1;
+
+        try testing.expectError(error.OutOfMemory, pool.reserve(capacity));
+        try testing.expectEqual(allocations, failing.alloc_index);
+        try testing.expectEqualDeep(fixtures.plane(10), fixtures.planeAt(&pool, pool.indexOf(id).?).?);
+    }
+}
+
 test "zero sized components survive growth removal and slot reuse" {
     const Tag = struct {};
     const Value = struct { number: u32 };

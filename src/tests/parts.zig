@@ -34,24 +34,6 @@ test "automatic removal hides pending rows before iterator cleanup" {
     try testing.expect(store.get(fixtures.Plane, survivor) != null);
 }
 
-test "automatic removal cleans up when an unfinished iterator closes" {
-    var store = fixtures.GameStore.init(testing.allocator);
-    defer store.deinit();
-
-    const removed = store.add(fixtures.plane(10));
-    _ = store.add(fixtures.plane(20));
-    var iterator = store.things(fixtures.Plane);
-    defer iterator.deinit();
-
-    _ = iterator.next() orelse return error.MissingEntity;
-    store.remove(iterator.thingId());
-    iterator.deinit();
-    iterator.deinit();
-
-    try testing.expectEqual(1, store.count(fixtures.Plane));
-    try testing.expect(store.get(fixtures.Plane, removed) == null);
-}
-
 test "parts iteration visits matching things in type order and mutates original data" {
     var store = fixtures.GameStore.init(testing.allocator);
     defer store.deinit();
@@ -426,31 +408,6 @@ test "part aliases can use names also used by iterator methods" {
     try testing.expect(store.get(fixtures.Plane, parts.thingId()) != null);
     try testing.expectEqual(15, store.get(fixtures.Plane, parts.thingId()).?.health.current);
     try testing.expectEqual(25, store.get(fixtures.Plane, parts.thingId()).?.motion.x);
-}
-
-test "things iteration skips pending rows and cleans up on exhaustion" {
-    var store = fixtures.GameStore.init(testing.allocator);
-    defer store.deinit();
-
-    const first = store.add(fixtures.plane(10));
-    const skipped = store.add(fixtures.plane(20));
-    const last = store.add(fixtures.plane(30));
-    var iterator = store.things(fixtures.Plane);
-    defer iterator.deinit();
-
-    _ = iterator.next() orelse return error.MissingEntity;
-    try testing.expectEqualDeep(first, iterator.thingId());
-    store.remove(skipped);
-
-    const row = iterator.next() orelse return error.MissingEntity;
-    try testing.expectEqualDeep(last, iterator.thingId());
-    try testing.expectEqual(30, row.health.current);
-    try testing.expect(iterator.next() == null);
-    try testing.expectEqual(2, store.count(fixtures.Plane));
-
-    _ = store.add(fixtures.plane(40));
-    iterator.deinit();
-    try testing.expectEqual(3, store.count(fixtures.Plane));
 }
 
 test "parts iteration skips a type whose rows were all removed before visiting" {

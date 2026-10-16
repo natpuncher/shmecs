@@ -5,4 +5,7 @@ test {
     _ = @import("tests/pool_storage.zig");
     _ = @import("tests/store.zig");
     _ = @import("tests/parts.zig");
+    _ = @import("tests/things.zig");
+    _ = @import("tests/clear.zig");
+    _ = @import("tests/copy.zig");
 }
