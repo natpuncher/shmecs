@@ -86,9 +86,9 @@ pub fn PoolStorage(comptime Entity: type) type {
             const slot_index: u32 = if (this.free_slot != invalid_index) this.free_slot else @intCast(this.slot_count);
 
             if (this.free_slot != invalid_index) {
-                this.free_slot = this.slots[slot_index].next_free;
+                this.free_slot = this.slots[slot_index].index;
             } else {
-                this.slots[slot_index] = .{ .dense_index = @intCast(this.len) };
+                this.slots[slot_index] = .{ .index = @intCast(this.len) };
                 this.slot_count += 1;
             }
 
@@ -99,8 +99,7 @@ pub fn PoolStorage(comptime Entity: type) type {
             }
 
             this.removal_flags[index] = false;
-            this.slots[slot_index].dense_index = @intCast(index);
-            this.slots[slot_index].next_free = invalid_index;
+            this.slots[slot_index].index = @intCast(index);
             this.dense_to_slot[index] = slot_index;
             this.len += 1;
 
@@ -115,10 +114,10 @@ pub fn PoolStorage(comptime Entity: type) type {
             if (id.pool != this.pool_index or id.slot >= this.slot_count) return null;
 
             const slot = this.slots[id.slot];
-            if (slot.generation != id.generation or slot.dense_index >= this.len) return null;
-            if (this.removal_flags[slot.dense_index]) return null;
+            if (slot.generation != id.generation or slot.index >= this.len) return null;
+            if (this.dense_to_slot[slot.index] != id.slot or this.removal_flags[slot.index]) return null;
 
-            return slot.dense_index;
+            return slot.index;
         }
 
         pub fn remove(this: *This, id: ThingId) void {
@@ -252,7 +251,7 @@ pub fn PoolStorage(comptime Entity: type) type {
 
                 const moved_slot = this.dense_to_slot[last];
                 this.dense_to_slot[index] = moved_slot;
-                this.slots[moved_slot].dense_index = @intCast(index);
+                this.slots[moved_slot].index = @intCast(index);
                 this.removal_flags[index] = this.removal_flags[last];
             }
 
@@ -277,11 +276,11 @@ pub fn PoolStorage(comptime Entity: type) type {
         }
 
         fn recycleSlot(slot: *Slot, slot_index: u32, free_slot: u32) u32 {
-            slot.dense_index = invalid_index;
+            slot.index = invalid_index;
             if (slot.generation == std.math.maxInt(u32)) return free_slot;
 
             slot.generation += 1;
-            slot.next_free = free_slot;
+            slot.index = free_slot;
             return slot_index;
         }
     };

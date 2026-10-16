@@ -114,6 +114,36 @@ test "pool rejects invalid pool slot and generation without changing data" {
     try testing.expect(pool.indexOf(valid) != null);
 }
 
+test "a free slot with its next generation cannot alias a surviving row" {
+    var pool = PoolStorage(fixtures.Plane).init(testing.allocator);
+    defer pool.deinit();
+
+    const first = try pool.append(fixtures.plane(10));
+    const second = try pool.append(fixtures.plane(20));
+    const third = try pool.append(fixtures.plane(30));
+    const fourth = try pool.append(fixtures.plane(40));
+
+    pool.remove(first);
+    pool.remove(second);
+
+    var unallocated = second;
+    unallocated.generation += 1;
+
+    try testing.expect(pool.indexOf(unallocated) == null);
+    pool.remove(unallocated);
+
+    try testing.expectEqual(2, pool.len);
+    try testing.expectEqualDeep(fixtures.plane(30), fixtures.planeAt(&pool, pool.indexOf(third).?).?);
+    try testing.expectEqualDeep(fixtures.plane(40), fixtures.planeAt(&pool, pool.indexOf(fourth).?).?);
+
+    const replacement = try pool.append(fixtures.plane(50));
+    const next = try pool.append(fixtures.plane(60));
+
+    try testing.expectEqualDeep(unallocated, replacement);
+    try testing.expectEqual(first.slot, next.slot);
+    try testing.expectEqualDeep(fixtures.plane(50), fixtures.planeAt(&pool, pool.indexOf(replacement).?).?);
+}
+
 test "pool removes first last and moved entities until empty" {
     var pool = PoolStorage(fixtures.Plane).init(testing.allocator);
     defer pool.deinit();

@@ -9,7 +9,6 @@ pub const ThingId = struct {
 pub const invalid_index = std.math.maxInt(u32);
 
 pub const Slot = struct {
-    dense_index: u32,
+    index: u32,
     generation: u32 = 1,
-    next_free: u32 = invalid_index,
 };
