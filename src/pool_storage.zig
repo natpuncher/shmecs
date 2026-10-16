@@ -32,7 +32,8 @@ pub fn PoolStorage(comptime Entity: type) type {
         len: usize = 0,
         capacity: usize = 0,
         active_iterators: usize = 0,
-        has_pending_removals: bool = false,
+        pending_removals: usize = 0,
+        removal_end: usize = 0,
 
         pub fn init(allocator: std.mem.Allocator) This {
             return .{ .allocator = allocator };
@@ -51,65 +52,35 @@ pub fn PoolStorage(comptime Entity: type) type {
             std.debug.assert(this.active_iterators == 0);
             if (capacity <= this.capacity) return;
 
-            const layout = try Layout.calculate(capacity);
-            const memory = try this.allocator.alignedAlloc(u8, .fromByteUnits(block_alignment), layout.size);
-            var columns: Columns = undefined;
-
-            inline for (fields, 0..) |field, index| {
-                const pointer: [*]field.type = @ptrCast(@alignCast(memory.ptr + layout.offsets[index]));
-                columns[index] = pointer[0..capacity];
-                @memcpy(columns[index][0..this.len], this.columns[index][0..this.len]);
-            }
-
-            const removal_flags_pointer: [*]bool = @ptrCast(memory.ptr + layout.removal_flags_offset);
-            const removal_flags = removal_flags_pointer[0..capacity];
-            @memcpy(removal_flags[0..this.len], this.removal_flags[0..this.len]);
-
-            const slot_pointer: [*]Slot = @ptrCast(@alignCast(memory.ptr + layout.slots_offset));
-            const slots = slot_pointer[0..capacity];
-            @memcpy(slots[0..this.slot_count], this.slots[0..this.slot_count]);
-
-            const dense_to_slot_pointer: [*]usize = @ptrCast(@alignCast(memory.ptr + layout.dense_to_slot_offset));
-            const dense_to_slot = dense_to_slot_pointer[0..capacity];
-            @memcpy(dense_to_slot[0..this.len], this.dense_to_slot[0..this.len]);
+            var replacement = try this.allocate(capacity);
+            replacement.copyData(this);
 
             this.allocator.free(this.memory);
-            this.memory = memory;
-            this.columns = columns;
-            this.removal_flags = removal_flags;
-            this.slots = slots;
-            this.dense_to_slot = dense_to_slot;
-            this.capacity = capacity;
+            this.* = replacement;
         }
 
         pub fn copyFrom(this: *This, source: *const This) std.mem.Allocator.Error!void {
             std.debug.assert(this.active_iterators == 0 and source.active_iterators == 0);
             if (this == source) return;
 
-            try this.reserve(source.slot_count);
+            if (source.slot_count > this.capacity) {
+                var replacement = try this.allocate(try this.growthCapacity(source.slot_count));
+                replacement.copyData(source);
 
-            inline for (fields, 0..) |_, index| {
-                @memcpy(this.columns[index][0..source.len], source.columns[index][0..source.len]);
+                this.allocator.free(this.memory);
+                this.* = replacement;
+                return;
             }
 
-            @memcpy(this.slots[0..source.slot_count], source.slots[0..source.slot_count]);
-            @memcpy(this.dense_to_slot[0..source.len], source.dense_to_slot[0..source.len]);
-            @memcpy(this.removal_flags[0..source.len], source.removal_flags[0..source.len]);
-
-            this.len = source.len;
-            this.slot_count = source.slot_count;
-            this.free_slot = source.free_slot;
-            this.has_pending_removals = false;
+            this.copyData(source);
         }
 
         pub fn append(this: *This, entity: Entity) std.mem.Allocator.Error!ThingId {
             std.debug.assert(this.active_iterators == 0);
 
             if (this.free_slot == invalid_index and this.slot_count == this.capacity) {
-                const increment = @max(this.capacity / 2, 8);
-                const capacity = std.math.add(usize, this.capacity, increment) catch return error.OutOfMemory;
-
-                try this.reserve(capacity);
+                const required = std.math.add(usize, this.slot_count, 1) catch return error.OutOfMemory;
+                try this.reserve(try this.growthCapacity(required));
             }
 
             const slot_index = if (this.free_slot != invalid_index) this.free_slot else this.slot_count;
@@ -155,7 +126,8 @@ pub fn PoolStorage(comptime Entity: type) type {
 
             if (this.active_iterators != 0) {
                 this.removal_flags[index] = true;
-                this.has_pending_removals = true;
+                this.pending_removals += 1;
+                this.removal_end = @max(this.removal_end, index + 1);
                 return;
             }
 
@@ -179,19 +151,73 @@ pub fn PoolStorage(comptime Entity: type) type {
         }
 
         fn flushRemovals(this: *This) void {
-            if (!this.has_pending_removals) return;
+            if (this.pending_removals == 0) return;
 
-            var index = this.len;
+            if (this.pending_removals == this.len) {
+                this.removeAll();
+            } else {
+                var index = this.removal_end;
+                var remaining = this.pending_removals;
 
-            while (index > 0) {
-                index -= 1;
+                while (remaining != 0) {
+                    index -= 1;
 
-                if (!this.removal_flags[index]) continue;
+                    if (!this.removal_flags[index]) continue;
 
-                this.removeAt(index);
+                    this.removeAt(index);
+                    remaining -= 1;
+                }
             }
 
-            this.has_pending_removals = false;
+            this.pending_removals = 0;
+            this.removal_end = 0;
+        }
+
+        fn growthCapacity(this: *const This, required: usize) std.mem.Allocator.Error!usize {
+            const increment = @max(this.capacity / 2, 8);
+            const capacity = std.math.add(usize, this.capacity, increment) catch return error.OutOfMemory;
+
+            return @max(required, capacity);
+        }
+
+        fn allocate(this: *const This, capacity: usize) std.mem.Allocator.Error!This {
+            const layout = try Layout.calculate(capacity);
+            const memory = try this.allocator.alignedAlloc(u8, .fromByteUnits(block_alignment), layout.size);
+            var storage = This.init(this.allocator);
+
+            storage.memory = memory;
+            storage.capacity = capacity;
+            storage.pool_index = this.pool_index;
+
+            inline for (fields, 0..) |field, index| {
+                const pointer: [*]field.type = @ptrCast(@alignCast(memory.ptr + layout.offsets[index]));
+                storage.columns[index] = pointer[0..capacity];
+            }
+
+            const removal_flags_pointer: [*]bool = @ptrCast(memory.ptr + layout.removal_flags_offset);
+            storage.removal_flags = removal_flags_pointer[0..capacity];
+
+            const slot_pointer: [*]Slot = @ptrCast(@alignCast(memory.ptr + layout.slots_offset));
+            storage.slots = slot_pointer[0..capacity];
+
+            const dense_to_slot_pointer: [*]usize = @ptrCast(@alignCast(memory.ptr + layout.dense_to_slot_offset));
+            storage.dense_to_slot = dense_to_slot_pointer[0..capacity];
+
+            return storage;
+        }
+
+        fn copyData(this: *This, source: *const This) void {
+            inline for (fields, 0..) |_, index| {
+                @memcpy(this.columns[index][0..source.len], source.columns[index][0..source.len]);
+            }
+
+            @memcpy(this.slots[0..source.slot_count], source.slots[0..source.slot_count]);
+            @memcpy(this.dense_to_slot[0..source.len], source.dense_to_slot[0..source.len]);
+            @memcpy(this.removal_flags[0..source.len], source.removal_flags[0..source.len]);
+
+            this.len = source.len;
+            this.slot_count = source.slot_count;
+            this.free_slot = source.free_slot;
         }
 
         fn emptyColumns() Columns {
@@ -219,13 +245,31 @@ pub fn PoolStorage(comptime Entity: type) type {
 
             this.removal_flags[last] = false;
             this.len = last;
-            this.slots[slot_index].dense_index = invalid_index;
+            this.free_slot = recycleSlot(&this.slots[slot_index], slot_index, this.free_slot);
+        }
 
-            if (this.slots[slot_index].generation < std.math.maxInt(u64)) {
-                this.slots[slot_index].generation += 1;
-                this.slots[slot_index].next_free = this.free_slot;
-                this.free_slot = slot_index;
+        fn removeAll(this: *This) void {
+            var index = this.len;
+            var free_slot = this.free_slot;
+
+            while (index != 0) {
+                index -= 1;
+                const slot_index = this.dense_to_slot[index];
+                free_slot = recycleSlot(&this.slots[slot_index], slot_index, free_slot);
             }
+
+            @memset(this.removal_flags[0..this.len], false);
+            this.len = 0;
+            this.free_slot = free_slot;
+        }
+
+        fn recycleSlot(slot: *Slot, slot_index: usize, free_slot: usize) usize {
+            slot.dense_index = invalid_index;
+            if (slot.generation == std.math.maxInt(u64)) return free_slot;
+
+            slot.generation += 1;
+            slot.next_free = free_slot;
+            return slot_index;
         }
     };
 }

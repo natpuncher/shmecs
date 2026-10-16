@@ -49,6 +49,12 @@ pub fn main(init: std.process.Init) !void {
     try benchmarkTraversal(init.io, 16, true);
     try benchmarkSpawn(init.io, false);
     try benchmarkSpawn(init.io, true);
+    try benchmarkCopy(init.io, false);
+    try benchmarkCopy(init.io, true);
+
+    inline for (.{ 0, entity_count / 2, entity_count - 1 }) |row| {
+        try benchmarkSingleRemoval(init.io, row);
+    }
 
     inline for (.{ 0, 1, 10, 100 }) |percentage| {
         inline for (comptime std.meta.tags(Removal)) |method| {
@@ -258,6 +264,115 @@ fn benchmarkSpawn(io: std.Io, comptime reserved: bool) !void {
         if (reserved) "reserved (reserve excluded)" else "automatic growth",
         nanoseconds / entity_count,
         nanoseconds / 1_000_000,
+    });
+}
+
+fn benchmarkCopy(io: std.Io, comptime growing: bool) !void {
+    const history_count = 8;
+    const copy_count = 32;
+    const added_per_copy = 512;
+    const initial_count = if (growing) entity_count - copy_count * added_per_copy else entity_count;
+    const GameStore = shmecs.Store(.{Entity(0)});
+    var timings: [sample_count]u64 = undefined;
+
+    for (0..sample_count + 1) |sample| {
+        var store = GameStore.init(allocator);
+        defer store.deinit();
+        store.reserve(Entity(0), entity_count);
+
+        for (0..initial_count) |index| {
+            _ = store.add(initialEntity(Entity(0), index));
+        }
+
+        var history: [history_count]GameStore = undefined;
+
+        for (0..history.len) |index| {
+            history[index] = GameStore.init(allocator);
+            history[index].copyFrom(&store);
+        }
+
+        defer for (0..history.len) |index| history[index].deinit();
+
+        var duration: u64 = 0;
+
+        for (0..copy_count) |frame| {
+            if (growing) {
+                const first = store.count(Entity(0));
+
+                for (first..first + added_per_copy) |index| {
+                    _ = store.add(initialEntity(Entity(0), index));
+                }
+            }
+
+            const snapshot = &history[frame % history.len];
+            const start = std.Io.Clock.awake.now(io);
+            snapshot.copyFrom(&store);
+            std.mem.doNotOptimizeAway(snapshot);
+            duration += elapsed(io, start);
+        }
+
+        const last = &history[(copy_count - 1) % history.len];
+
+        if (last.count(Entity(0)) != entity_count) return error.InvalidCopyCount;
+        if (storeChecksum(.{Entity(0)}, last) != storeChecksum(.{Entity(0)}, &store))
+            return error.InvalidCopyChecksum;
+
+        if (sample != 0) timings[sample - 1] = duration;
+    }
+
+    const nanoseconds: f64 = @floatFromInt(median(timings));
+
+    std.debug.print("copy/{s}/{d} history slots: {d:.3} us/copy\n", .{
+        if (growing) "growing" else "stable", history_count, nanoseconds / copy_count / 1000,
+    });
+}
+
+fn benchmarkSingleRemoval(io: std.Io, comptime row: usize) !void {
+    const repetitions = 256;
+    var timings: [sample_count]u64 = undefined;
+
+    for (0..sample_count + 1) |sample| {
+        var store = shmecs.Store(.{Entity(0)}).init(allocator);
+        defer store.deinit();
+        store.reserve(Entity(0), entity_count);
+
+        for (0..entity_count) |index| {
+            _ = store.add(initialEntity(Entity(0), index));
+        }
+
+        var duration: u64 = 0;
+
+        for (0..repetitions) |_| {
+            const storage = &store.pools[0];
+            const slot = storage.dense_to_slot[row];
+            const removed = shmecs.ThingId{
+                .pool = storage.pool_index,
+                .slot = slot,
+                .generation = storage.slots[slot].generation,
+            };
+
+            var things = store.things(Entity(0));
+            defer things.deinit();
+            store.remove(removed);
+
+            const start = std.Io.Clock.awake.now(io);
+            things.deinit();
+            std.mem.doNotOptimizeAway(&store);
+            duration += elapsed(io, start);
+
+            if (store.count(Entity(0)) != entity_count - 1) return error.InvalidRemovalCount;
+            if (store.get(Entity(0), removed) != null) return error.RemovedEntityStillVisible;
+
+            _ = store.add(initialEntity(Entity(0), entity_count - 1));
+        }
+
+        if (sample != 0) timings[sample - 1] = duration;
+    }
+
+    const nanoseconds: f64 = @floatFromInt(median(timings));
+
+    std.debug.print("cleanup/one/row {d}: {d:.3} us/cleanup (marking excluded)\n", .{
+        row, nanoseconds / repetitions / 1000,
     });
 }
 

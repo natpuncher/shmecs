@@ -13,6 +13,8 @@ pub fn ThingsIterator(comptime PoolType: type, comptime Thing: type) type {
 
         pool: *PoolType,
         len: usize,
+        columns: schema.Columns(Thing),
+        removal_flags: []const bool,
         next_index: usize = 0,
         current_index: ?usize = null,
         active: bool = true,
@@ -20,7 +22,12 @@ pub fn ThingsIterator(comptime PoolType: type, comptime Thing: type) type {
         pub fn init(pool: *PoolType) This {
             pool.active_iterators += 1;
 
-            return .{ .pool = pool, .len = pool.len };
+            return .{
+                .pool = pool,
+                .len = pool.len,
+                .columns = pool.columns,
+                .removal_flags = pool.removal_flags,
+            };
         }
 
         pub fn next(this: *This) ?Parts {
@@ -32,12 +39,12 @@ pub fn ThingsIterator(comptime PoolType: type, comptime Thing: type) type {
                 const row = this.next_index;
                 this.next_index += 1;
 
-                if (this.pool.removal_flags[row]) continue;
+                if (this.removal_flags[row]) continue;
 
                 var result: Parts = undefined;
 
                 inline for (fields, 0..) |field, index| {
-                    @field(result, field.name) = &this.pool.columns[index][row];
+                    @field(result, field.name) = &this.columns[index][row];
                 }
 
                 this.current_index = row;
@@ -137,6 +144,7 @@ pub fn PartsIterator(comptime StoreType: type, comptime thing_types: anytype, co
 
         pub fn thingId(this: *const This) ThingId {
             std.debug.assert(this.active and this.current_index != null);
+
             const row = this.current_index.?;
             const slot = this.dense_to_slot[row];
 
