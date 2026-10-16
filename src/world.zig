@@ -76,6 +76,7 @@ pub fn World(comptime entities: anytype) type {
                     const row = storage.indexOf(id) orelse return error.InvalidEntity;
 
                     storage.removal_flags[row] = true;
+                    storage.has_pending_removals = true;
                     return;
                 }
             }

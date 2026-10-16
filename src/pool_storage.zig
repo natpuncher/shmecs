@@ -34,6 +34,7 @@ pub fn PoolStorage(comptime Entity: type) type {
         len: usize = 0,
         capacity: usize = 0,
         active_iterators: usize = 0,
+        has_pending_removals: bool = false,
 
         pub fn init(allocator: std.mem.Allocator) This {
             return .{ .allocator = allocator };
@@ -149,6 +150,7 @@ pub fn PoolStorage(comptime Entity: type) type {
 
         pub fn flushRemovals(this: *This) error{PoolInUse}!usize {
             if (this.active_iterators != 0) return error.PoolInUse;
+            if (!this.has_pending_removals) return 0;
 
             var index = this.len;
             var removed: usize = 0;
@@ -162,6 +164,7 @@ pub fn PoolStorage(comptime Entity: type) type {
                 removed += 1;
             }
 
+            this.has_pending_removals = false;
             return removed;
         }
 
