@@ -26,13 +26,11 @@ or `null` for an invalid ID or a different entity type.
 Iterate over one entity type:
 
 ```zig
-{
-    var planes = world.pool(Plane).iterator();
-    defer planes.deinit();
+var planes = world.pool(Plane).iterator();
+defer planes.deinit();
 
-    while (planes.next()) |plane| {
-        plane.motion.x += plane.motion.velocity_x * delta;
-    }
+while (planes.next()) |plane| {
+    plane.motion.x += plane.motion.velocity_x * delta;
 }
 ```
 
