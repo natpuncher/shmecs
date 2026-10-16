@@ -55,7 +55,7 @@ test "pool removal moves every component and preserves the moved ID" {
     last_entity.weapon.ammunition = 42;
     const last = try pool.append(last_entity);
 
-    try pool.remove(middle);
+    pool.remove(middle);
 
     try testing.expect(pool.indexOf(middle) == null);
     try testing.expectEqual(2, pool.len);
@@ -77,16 +77,16 @@ test "pool rejects stale IDs after slot reuse and repeated deletion" {
 
     const old = try pool.append(fixtures.plane(10));
 
-    try pool.remove(old);
+    pool.remove(old);
 
-    try testing.expectError(error.InvalidEntity, pool.remove(old));
+    pool.remove(old);
 
     const replacement = try pool.append(fixtures.plane(90));
 
     try testing.expectEqual(old.slot, replacement.slot);
     try testing.expect(old.generation != replacement.generation);
     try testing.expect(pool.indexOf(old) == null);
-    try testing.expectError(error.InvalidEntity, pool.remove(old));
+    pool.remove(old);
 
     const row = pool.indexOf(replacement) orelse return error.MissingEntity;
     const entity = fixtures.planeAt(&pool, row) orelse return error.MissingEntity;
@@ -107,7 +107,7 @@ test "pool rejects invalid pool slot and generation without changing data" {
 
     for (0..invalid.len) |index| {
         try testing.expect(pool.indexOf(invalid[index]) == null);
-        try testing.expectError(error.InvalidEntity, pool.remove(invalid[index]));
+        pool.remove(invalid[index]);
     }
 
     try testing.expectEqual(1, pool.len);
@@ -128,7 +128,7 @@ test "pool removes first last and moved entities until empty" {
     const order = [_]usize{ 0, 2, 3, 1 };
 
     for (0..order.len) |step| {
-        try pool.remove(ids[order[step]]);
+        pool.remove(ids[order[step]]);
 
         try testing.expect(pool.indexOf(ids[order[step]]) == null);
         try testing.expectEqual(order.len - step - 1, pool.len);
@@ -142,47 +142,56 @@ test "pool removes first last and moved entities until empty" {
     try testing.expect(fixtures.planeAt(&pool, 0) == null);
 }
 
-test "pool growth preserves pending removals and reused generations" {
+test "pool growth preserves IDs after deferred cleanup and slot reuse" {
     var pool = PoolStorage(fixtures.Plane).init(testing.allocator);
     defer pool.deinit();
 
     const first = try pool.append(fixtures.plane(10));
     const removed = try pool.append(fixtures.plane(20));
     const survivor = try pool.append(fixtures.plane(30));
-
-    try pool.remove(removed);
+    pool.remove(removed);
     const replacement = try pool.append(fixtures.plane(40));
-    const row = pool.indexOf(first) orelse return error.MissingEntity;
 
-    try fixtures.markAt(&pool, row);
-    try pool.reserve(128);
+    var iterator = pool.iterator();
+    defer iterator.deinit();
+    pool.remove(first);
 
     try testing.expectEqual(3, pool.len);
-    try testing.expectEqual(1, try pool.flushRemovals());
+    try testing.expect(pool.indexOf(first) == null);
+
+    iterator.deinit();
+    try pool.reserve(128);
+
+    try testing.expectEqual(2, pool.len);
     try testing.expect(pool.indexOf(first) == null);
     try testing.expect(pool.indexOf(removed) == null);
     try testing.expect(pool.indexOf(survivor) != null);
     try testing.expect(pool.indexOf(replacement) != null);
 }
 
-test "pending removal follows an entity moved by immediate removal" {
+test "deferred cleanup preserves the moved survivor ID" {
     var pool = PoolStorage(fixtures.Plane).init(testing.allocator);
     defer pool.deinit();
 
     const first = try pool.append(fixtures.plane(10));
     const survivor = try pool.append(fixtures.plane(20));
-    const pending = try pool.append(fixtures.plane(30));
+    const last = try pool.append(fixtures.plane(30));
+    var iterator = pool.iterator();
+    defer iterator.deinit();
 
-    try fixtures.markAt(&pool, 2);
-    try pool.remove(first);
+    pool.remove(last);
+    pool.remove(first);
+    iterator.deinit();
 
-    try testing.expectEqual(1, try pool.flushRemovals());
-    try testing.expect(pool.indexOf(pending) == null);
-    try testing.expect(pool.indexOf(survivor) != null);
+    try testing.expect(pool.indexOf(first) == null);
+    try testing.expect(pool.indexOf(last) == null);
     try testing.expectEqual(1, pool.len);
+    const row = pool.indexOf(survivor) orelse return error.MissingEntity;
+
+    try testing.expectEqualDeep(fixtures.plane(20), fixtures.planeAt(&pool, row).?);
 }
 
-test "deferred removal handles adjacent marks and the last row exactly once" {
+test "deferred removal handles adjacent rows and duplicate requests exactly once" {
     var pool = PoolStorage(fixtures.Plane).init(testing.allocator);
     defer pool.deinit();
 
@@ -193,13 +202,20 @@ test "deferred removal handles adjacent marks and the last row exactly once" {
         ids[index] = try pool.append(fixtures.plane(value));
     }
 
-    try fixtures.markAt(&pool, 1);
-    try fixtures.markAt(&pool, 1);
-    try fixtures.markAt(&pool, 2);
-    try fixtures.markAt(&pool, 4);
+    var iterator = pool.iterator();
+    defer iterator.deinit();
 
-    try testing.expectEqual(3, try pool.flushRemovals());
-    try testing.expectEqual(0, try pool.flushRemovals());
+    pool.remove(ids[1]);
+    pool.remove(ids[1]);
+    pool.remove(ids[2]);
+    pool.remove(ids[4]);
+
+    try testing.expectEqual(5, pool.len);
+
+    iterator.deinit();
+    iterator.deinit();
+
+    try testing.expectEqual(2, pool.len);
     try testing.expect(pool.indexOf(ids[0]) != null);
     try testing.expect(pool.indexOf(ids[3]) != null);
     try testing.expect(pool.indexOf(ids[1]) == null);
@@ -207,25 +223,27 @@ test "deferred removal handles adjacent marks and the last row exactly once" {
     try testing.expect(pool.indexOf(ids[4]) == null);
 }
 
-test "failed reserve preserves IDs values and pending removals" {
+test "failed reserve preserves survivors after deferred cleanup" {
     var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 1 });
     var pool = PoolStorage(fixtures.Plane).init(failing.allocator());
     defer pool.deinit();
 
-    const pending = try pool.append(fixtures.plane(10));
+    const removed = try pool.append(fixtures.plane(10));
     const survivor = try pool.append(fixtures.plane(20));
+    var iterator = pool.iterator();
+    defer iterator.deinit();
 
-    try fixtures.markAt(&pool, 0);
+    pool.remove(removed);
+    iterator.deinit();
 
     try testing.expectError(error.OutOfMemory, pool.reserve(128));
-    try testing.expectEqual(2, pool.len);
+    try testing.expectEqual(1, pool.len);
 
-    const entity = fixtures.planeAt(&pool, 1) orelse return error.MissingEntity;
+    const row = pool.indexOf(survivor) orelse return error.MissingEntity;
+    const entity = fixtures.planeAt(&pool, row) orelse return error.MissingEntity;
 
     try testing.expectEqualDeep(fixtures.plane(20), entity);
-    try testing.expectEqual(1, try pool.flushRemovals());
-    try testing.expect(pool.indexOf(pending) == null);
-    try testing.expect(pool.indexOf(survivor) != null);
+    try testing.expect(pool.indexOf(removed) == null);
 }
 
 test "failed append preserves the pool and permits a later successful append" {
@@ -280,7 +298,7 @@ test "zero sized components survive growth removal and slot reuse" {
     const second = try pool.append(.{ .tag = .{}, .value = .{ .number = 22 } });
 
     try pool.reserve(33);
-    try pool.remove(first);
+    pool.remove(first);
     const replacement = try pool.append(.{ .tag = .{}, .value = .{ .number = 33 } });
 
     try testing.expectEqual(2, pool.components(Tag).len);
@@ -301,7 +319,7 @@ test "empty entities still support stable IDs and deletion" {
     const first = try pool.append(.{});
     const second = try pool.append(.{});
 
-    try pool.remove(first);
+    pool.remove(first);
     try pool.reserve(17);
 
     try testing.expectEqual(1, pool.len);
@@ -339,7 +357,7 @@ test "overaligned columns retain alignment and values after relocation" {
     try testing.expectEqual(0, @intFromPtr(pool.components(Large).ptr) % 64);
 
     try pool.reserve(19);
-    try pool.remove(first);
+    pool.remove(first);
     const row = pool.indexOf(second) orelse return error.MissingEntity;
 
     try testing.expectEqual(0, @intFromPtr(pool.components(Large).ptr) % 64);
@@ -358,12 +376,12 @@ test "exhausted generations retire slots instead of reviving stale IDs" {
     pool.slots[last_generation.slot].generation = std.math.maxInt(u64);
     last_generation.generation = std.math.maxInt(u64);
 
-    try pool.remove(last_generation);
+    pool.remove(last_generation);
 
     const replacement = try pool.append(fixtures.plane(20));
 
     try testing.expect(last_generation.slot != replacement.slot);
     try testing.expect(pool.indexOf(last_generation) == null);
-    try testing.expectError(error.InvalidEntity, pool.remove(last_generation));
+    pool.remove(last_generation);
     try testing.expect(pool.indexOf(replacement) != null);
 }

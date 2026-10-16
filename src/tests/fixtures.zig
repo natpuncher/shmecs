@@ -19,7 +19,7 @@ pub const Bullet = struct {
     appearance: Appearance,
 };
 
-pub const GameWorld = @import("../world.zig").World(.{ Plane, Building, Bullet });
+pub const GameWorld = @import("../store.zig").World(.{ Plane, Building, Bullet });
 
 pub fn plane(value: f32) Plane {
     return .{
@@ -51,16 +51,4 @@ pub fn planeAt(pool: anytype, index: usize) ?Plane {
         .motion = pool.components(Motion)[index],
         .weapon = pool.components(Weapon)[index],
     };
-}
-
-pub fn markAt(pool: anytype, index: usize) !void {
-    var iterator = pool.iterator();
-    defer iterator.deinit();
-
-    for (0..index) |_| {
-        _ = iterator.next() orelse return error.MissingEntity;
-    }
-
-    _ = iterator.next() orelse return error.MissingEntity;
-    try iterator.markForRemoval();
 }

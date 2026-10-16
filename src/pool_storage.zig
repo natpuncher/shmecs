@@ -1,7 +1,7 @@
 const std = @import("std");
 const schema = @import("schema.zig");
 const StorageLayout = @import("storage_layout.zig").StorageLayout;
-const PoolIterator = @import("query.zig").PoolIterator;
+const ThingsIterator = @import("iterators.zig").ThingsIterator;
 const identity = @import("entity_id.zig");
 const EntityId = identity.EntityId;
 const Slot = identity.Slot;
@@ -18,9 +18,7 @@ pub fn PoolStorage(comptime Entity: type) type {
     return struct {
         const This = @This();
 
-        pub const Error = std.mem.Allocator.Error || error{PoolInUse};
-        pub const RemoveError = error{ PoolInUse, InvalidEntity };
-        pub const Iterator = PoolIterator(This, Entity);
+        pub const Iterator = ThingsIterator(This, Entity);
 
         allocator: std.mem.Allocator,
         memory: []align(block_alignment) u8 = &.{},
@@ -49,8 +47,8 @@ pub fn PoolStorage(comptime Entity: type) type {
             this.pool_index = pool_index;
         }
 
-        pub fn reserve(this: *This, capacity: usize) Error!void {
-            if (this.active_iterators != 0) return error.PoolInUse;
+        pub fn reserve(this: *This, capacity: usize) std.mem.Allocator.Error!void {
+            std.debug.assert(this.active_iterators == 0);
             if (capacity <= this.capacity) return;
 
             const layout = try Layout.calculate(capacity);
@@ -84,8 +82,28 @@ pub fn PoolStorage(comptime Entity: type) type {
             this.capacity = capacity;
         }
 
-        pub fn append(this: *This, entity: Entity) Error!EntityId {
-            if (this.active_iterators != 0) return error.PoolInUse;
+        pub fn copyFrom(this: *This, source: *const This) std.mem.Allocator.Error!void {
+            std.debug.assert(this.active_iterators == 0 and source.active_iterators == 0);
+            if (this == source) return;
+
+            try this.reserve(source.slot_count);
+
+            inline for (fields, 0..) |_, index| {
+                @memcpy(this.columns[index][0..source.len], source.columns[index][0..source.len]);
+            }
+
+            @memcpy(this.slots[0..source.slot_count], source.slots[0..source.slot_count]);
+            @memcpy(this.dense_to_slot[0..source.len], source.dense_to_slot[0..source.len]);
+            @memcpy(this.removal_flags[0..source.len], source.removal_flags[0..source.len]);
+
+            this.len = source.len;
+            this.slot_count = source.slot_count;
+            this.free_slot = source.free_slot;
+            this.has_pending_removals = false;
+        }
+
+        pub fn append(this: *This, entity: Entity) std.mem.Allocator.Error!EntityId {
+            std.debug.assert(this.active_iterators == 0);
 
             if (this.free_slot == vacant_index and this.slot_count == this.capacity) {
                 const increment = @max(this.capacity / 2, 8);
@@ -127,14 +145,19 @@ pub fn PoolStorage(comptime Entity: type) type {
 
             const slot = this.slots[id.slot];
             if (slot.generation != id.generation or slot.dense_index >= this.len) return null;
+            if (this.removal_flags[slot.dense_index]) return null;
 
             return slot.dense_index;
         }
 
-        pub fn remove(this: *This, id: EntityId) RemoveError!void {
-            const index = this.indexOf(id) orelse return error.InvalidEntity;
+        pub fn remove(this: *This, id: EntityId) void {
+            const index = this.indexOf(id) orelse return;
 
-            if (this.active_iterators != 0) return error.PoolInUse;
+            if (this.active_iterators != 0) {
+                this.removal_flags[index] = true;
+                this.has_pending_removals = true;
+                return;
+            }
 
             this.removeAt(index);
         }
@@ -148,12 +171,17 @@ pub fn PoolStorage(comptime Entity: type) type {
             return .init(this);
         }
 
-        pub fn flushRemovals(this: *This) error{PoolInUse}!usize {
-            if (this.active_iterators != 0) return error.PoolInUse;
-            if (!this.has_pending_removals) return 0;
+        pub fn releaseIterator(this: *This) void {
+            std.debug.assert(this.active_iterators != 0);
+            this.active_iterators -= 1;
+
+            if (this.active_iterators == 0) this.flushRemovals();
+        }
+
+        fn flushRemovals(this: *This) void {
+            if (!this.has_pending_removals) return;
 
             var index = this.len;
-            var removed: usize = 0;
 
             while (index > 0) {
                 index -= 1;
@@ -161,11 +189,9 @@ pub fn PoolStorage(comptime Entity: type) type {
                 if (!this.removal_flags[index]) continue;
 
                 this.removeAt(index);
-                removed += 1;
             }
 
             this.has_pending_removals = false;
-            return removed;
         }
 
         fn emptyColumns() Columns {

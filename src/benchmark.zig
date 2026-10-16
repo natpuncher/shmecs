@@ -11,8 +11,8 @@ const allocator = std.heap.page_allocator;
 const Motion = struct { x: f32, y: f32, velocity_x: f32, velocity_y: f32 };
 const Health = struct { current: f32, maximum: f32 };
 const Cold = struct { bytes: [64]u8 };
-const Traversal = enum { array, columns, iterator, query };
-const Marking = enum { world, iterator, query };
+const Traversal = enum { array, storage_columns, things, parts };
+const Removal = enum { direct, things, parts };
 
 fn Entity(comptime tag: usize) type {
     return struct {
@@ -42,7 +42,7 @@ pub fn main(init: std.process.Init) !void {
         @sizeOf(Motion) + @sizeOf(Health) + @sizeOf(Cold),
         @sizeOf(shmecs.EntityId),
     });
-    std.debug.print("Traversal includes iterator setup/teardown; flush excludes marking. Allocator: page_allocator.\n", .{});
+    std.debug.print("storage_columns uses internal storage directly. Traversal includes iterator setup/teardown; removals include selection, removal, and automatic cleanup. Allocator: page_allocator.\n", .{});
 
     try benchmarkTraversal(init.io, 1, false);
     try benchmarkTraversal(init.io, 16, false);
@@ -51,7 +51,7 @@ pub fn main(init: std.process.Init) !void {
     try benchmarkSpawn(init.io, true);
 
     inline for (.{ 0, 1, 10, 100 }) |percentage| {
-        inline for (comptime std.meta.tags(Marking)) |method| {
+        inline for (comptime std.meta.tags(Removal)) |method| {
             try benchmarkRemovals(init.io, percentage, method);
         }
     }
@@ -78,18 +78,18 @@ fn benchmarkTraversal(io: std.Io, comptime pool_count: usize, comptime with_empt
     @setEvalBranchQuota(20_000);
 
     const types = comptime entityTypes(pool_count);
-    var world = shmecs.World(types).init(allocator);
-    defer world.deinit();
+    var store = shmecs.Store(types).init(allocator);
+    defer store.deinit();
 
     const populated_count = if (with_empty_pools) pool_count / 2 else pool_count;
     var populated_index: usize = 0;
 
     inline for (types, 0..) |T, pool_index| {
         if (!with_empty_pools or pool_index % 4 == 1 or pool_index % 4 == 2) {
-            try world.pool(T).reserve(entity_count / populated_count);
+            store.reserve(T, entity_count / populated_count);
 
             for (0..entity_count / populated_count) |index| {
-                _ = try world.add(initialEntity(T, populated_index * (entity_count / populated_count) + index));
+                _ = store.add(initialEntity(T, populated_index * (entity_count / populated_count) + index));
             }
 
             populated_index += 1;
@@ -116,18 +116,18 @@ fn benchmarkTraversal(io: std.Io, comptime pool_count: usize, comptime with_empt
 
             inline for (methods, 0..) |method, index| {
                 if (method_index == index) {
-                    resetMotions(types, &world, array);
-                    update(method, types, &world, array);
+                    resetMotions(types, &store, array);
+                    update(method, types, &store, array);
 
                     const start = std.Io.Clock.awake.now(io);
 
                     for (0..frame_count) |_| {
-                        update(method, types, &world, array);
+                        update(method, types, &store, array);
                     }
 
                     timings[index][sample] = elapsed(io, start);
 
-                    const result = if (method == .array) checksum(array) else worldChecksum(types, &world);
+                    const result = if (method == .array) checksum(array) else storeChecksum(types, &store);
                     if (result != expected) return error.InvalidTraversalChecksum;
                 }
             }
@@ -149,13 +149,13 @@ fn benchmarkTraversal(io: std.Io, comptime pool_count: usize, comptime with_empt
     }
 }
 
-fn resetMotions(comptime types: anytype, world: anytype, array: []Motion) void {
+fn resetMotions(comptime types: anytype, store: anytype, array: []Motion) void {
     for (0..array.len) |index| array[index] = initialMotion(index);
 
     var offset: usize = 0;
 
-    inline for (types) |T| {
-        const motion = world.pool(T).components(Motion);
+    inline for (types, 0..) |_, pool_index| {
+        const motion = store.pools[pool_index].components(Motion);
 
         for (0..motion.len) |index| {
             motion[index] = initialMotion(offset + index);
@@ -165,19 +165,19 @@ fn resetMotions(comptime types: anytype, world: anytype, array: []Motion) void {
     }
 }
 
-noinline fn update(comptime method: Traversal, comptime types: anytype, world: anytype, array: []Motion) void {
+noinline fn update(comptime method: Traversal, comptime types: anytype, store: anytype, array: []Motion) void {
     switch (method) {
         .array => {
             move(array);
             std.mem.doNotOptimizeAway(array.ptr);
         },
-        .columns => {
-            inline for (types) |T| move(world.pool(T).components(Motion));
-            std.mem.doNotOptimizeAway(world);
+        .storage_columns => {
+            inline for (types, 0..) |_, index| move(store.pools[index].components(Motion));
+            std.mem.doNotOptimizeAway(store);
         },
-        .iterator => {
+        .things => {
             inline for (types) |T| {
-                var entities = world.pool(T).iterator();
+                var entities = store.things(T);
                 defer entities.deinit();
 
                 while (entities.next()) |entity| {
@@ -186,18 +186,18 @@ noinline fn update(comptime method: Traversal, comptime types: anytype, world: a
                 }
             }
 
-            std.mem.doNotOptimizeAway(world);
+            std.mem.doNotOptimizeAway(store);
         },
-        .query => {
-            var query = world.query(.{ .motion = Motion });
-            defer query.deinit();
+        .parts => {
+            var parts = store.parts(.{ .motion = Motion });
+            defer parts.deinit();
 
-            while (query.next()) |entity| {
+            while (parts.next()) |entity| {
                 entity.motion.x += entity.motion.velocity_x * delta;
                 entity.motion.y += entity.motion.velocity_y * delta;
             }
 
-            std.mem.doNotOptimizeAway(world);
+            std.mem.doNotOptimizeAway(store);
         },
     }
 }
@@ -222,10 +222,10 @@ fn checksum(motion: []const Motion) f64 {
     return result;
 }
 
-fn worldChecksum(comptime types: anytype, world: anytype) f64 {
+fn storeChecksum(comptime types: anytype, store: anytype) f64 {
     var result: f64 = 0;
 
-    inline for (types) |T| result += checksum(world.pool(T).components(Motion));
+    inline for (types, 0..) |_, index| result += checksum(store.pools[index].components(Motion));
 
     return result;
 }
@@ -234,21 +234,21 @@ fn benchmarkSpawn(io: std.Io, comptime reserved: bool) !void {
     var timings: [sample_count]u64 = undefined;
 
     for (0..sample_count + 1) |sample| {
-        var world = shmecs.World(.{Entity(0)}).init(allocator);
-        defer world.deinit();
+        var store = shmecs.Store(.{Entity(0)}).init(allocator);
+        defer store.deinit();
 
-        if (reserved) try world.pool(Entity(0)).reserve(entity_count);
+        if (reserved) store.reserve(Entity(0), entity_count);
 
         const start = std.Io.Clock.awake.now(io);
 
         for (0..entity_count) |index| {
-            _ = try world.add(initialEntity(Entity(0), index));
+            _ = store.add(initialEntity(Entity(0), index));
         }
 
-        std.mem.doNotOptimizeAway(&world);
+        std.mem.doNotOptimizeAway(&store);
         const duration = elapsed(io, start);
 
-        if (world.pool(Entity(0)).len() != entity_count) return error.InvalidSpawnCount;
+        if (store.count(Entity(0)) != entity_count) return error.InvalidSpawnCount;
         if (sample != 0) timings[sample - 1] = duration;
     }
 
@@ -261,92 +261,84 @@ fn benchmarkSpawn(io: std.Io, comptime reserved: bool) !void {
     });
 }
 
-fn benchmarkRemovals(io: std.Io, comptime percentage: usize, comptime method: Marking) !void {
+fn benchmarkRemovals(io: std.Io, comptime percentage: usize, comptime method: Removal) !void {
     const ids = try allocator.alloc(shmecs.EntityId, entity_count);
     defer allocator.free(ids);
 
     var timings: [sample_count]u64 = undefined;
-    const repetitions = if (percentage == 0) 256 else 1;
+    var expected: usize = 0;
+
+    for (0..entity_count) |index| {
+        if (index % 100 < percentage) expected += 1;
+    }
 
     for (0..sample_count + 1) |sample| {
-        var world = shmecs.World(.{Entity(0)}).init(allocator);
-        defer world.deinit();
+        var store = shmecs.Store(.{Entity(0)}).init(allocator);
+        defer store.deinit();
 
-        try world.pool(Entity(0)).reserve(entity_count);
+        store.reserve(Entity(0), entity_count);
 
         for (0..entity_count) |index| {
-            ids[index] = try world.add(initialEntity(Entity(0), index));
+            ids[index] = store.add(initialEntity(Entity(0), index));
         }
 
-        var expected: usize = 0;
+        const start = std.Io.Clock.awake.now(io);
 
         switch (method) {
-            .world => {
+            .direct => {
                 for (0..ids.len) |index| {
-                    if (index % 100 < percentage) {
-                        try world.markForRemoval(ids[index]);
-                        expected += 1;
-                    }
+                    if (index % 100 < percentage) store.remove(ids[index]);
                 }
             },
-            .iterator => {
-                var entities = world.pool(Entity(0)).iterator();
+            .things => {
+                var entities = store.things(Entity(0));
                 defer entities.deinit();
                 var index: usize = 0;
 
                 while (entities.next()) |_| {
-                    if (!std.meta.eql(entities.id().?, ids[index])) return error.InvalidIteratorId;
-
-                    if (index % 100 < percentage) {
-                        try entities.markForRemoval();
-                        try entities.markForRemoval();
-                        expected += 1;
-                    }
+                    if (index % 100 < percentage) store.remove(entities.entityId());
 
                     index += 1;
                 }
             },
-            .query => {
-                var query = world.query(.{ .motion = Motion, .health = Health });
-                defer query.deinit();
+            .parts => {
+                var parts = store.parts(.{ .motion = Motion, .health = Health });
+                defer parts.deinit();
                 var index: usize = 0;
 
-                while (query.next()) |entity| {
-                    if (!std.meta.eql(query.id().?, ids[index])) return error.InvalidQueryId;
-                    if (entity.health.current != 100 or entity.motion.x != initialMotion(index).x)
-                        return error.InvalidQueryComponents;
-
-                    if (index % 100 < percentage) {
-                        try query.markForRemoval();
-                        try query.markForRemoval();
-                        expected += 1;
-                    }
+                while (parts.next()) |_| {
+                    if (index % 100 < percentage) store.remove(parts.entityId());
 
                     index += 1;
                 }
             },
         }
 
-        const start = std.Io.Clock.awake.now(io);
-        var removed: usize = 0;
-
-        for (0..repetitions) |_| {
-            removed += try world.flushRemovals();
-            std.mem.doNotOptimizeAway(&world);
-        }
-
+        std.mem.doNotOptimizeAway(&store);
         const duration = elapsed(io, start);
 
-        if (removed != expected or world.pool(Entity(0)).len() != entity_count - expected)
-            return error.InvalidRemovalCount;
+        if (store.count(Entity(0)) != entity_count - expected) return error.InvalidRemovalCount;
+
+        for (0..ids.len) |index| {
+            const entity = store.get(Entity(0), ids[index]);
+
+            if (index % 100 < percentage) {
+                if (entity != null) return error.RemovedEntityStillVisible;
+            } else {
+                const survivor = entity orelse return error.MissingSurvivor;
+
+                if (survivor.motion.x != initialMotion(index).x or survivor.health.current != 100)
+                    return error.InvalidSurvivorComponents;
+            }
+        }
 
         if (sample != 0) timings[sample - 1] = duration;
     }
 
     const nanoseconds: f64 = @floatFromInt(median(timings));
 
-    std.debug.print("flush/{d}%/{s}: {d:.6} us/flush\n", .{
-        percentage, @tagName(method), nanoseconds / repetitions / 1000,
+    std.debug.print("remove/{d}%/{s}: {d:.3} us/batch\n", .{
+        percentage, @tagName(method), nanoseconds / 1000,
     });
 }
 

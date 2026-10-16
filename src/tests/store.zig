@@ -1,6 +1,5 @@
 const std = @import("std");
 const testing = std.testing;
-const World = @import("../world.zig").World;
 const EntityId = @import("../entity_id.zig").EntityId;
 const fixtures = @import("fixtures.zig");
 
@@ -8,9 +7,9 @@ test "world distinguishes entity types whose IDs share a slot" {
     var world = fixtures.GameWorld.init(testing.allocator);
     defer world.deinit();
 
-    const plane = try world.add(fixtures.plane(25));
-    const building = try world.add(fixtures.building(50));
-    const bullet = try world.add(fixtures.bullet(75));
+    const plane = world.add(fixtures.plane(25));
+    const building = world.add(fixtures.building(50));
+    const bullet = world.add(fixtures.bullet(75));
 
     try testing.expectEqual(plane.slot, building.slot);
     try testing.expectEqual(plane.slot, bullet.slot);
@@ -32,7 +31,7 @@ test "entity lookup returns mutable component pointers and rejects mismatched ty
     var world = fixtures.GameWorld.init(testing.allocator);
     defer world.deinit();
 
-    const id = try world.add(fixtures.plane(40));
+    const id = world.add(fixtures.plane(40));
     const health = (world.get(fixtures.Plane, id) orelse return error.MissingEntity).health;
     health.current -= 13;
     const pool = world.pool(fixtures.Plane);
@@ -42,12 +41,12 @@ test "entity lookup returns mutable component pointers and rejects mismatched ty
     try testing.expect(world.get(fixtures.Building, id) == null);
 }
 
-test "world removal isolates pools and rejects malformed or deleted IDs" {
+test "world removal ignores malformed or deleted IDs and isolates pools" {
     var world = fixtures.GameWorld.init(testing.allocator);
     defer world.deinit();
 
-    const plane = try world.add(fixtures.plane(10));
-    const building = try world.add(fixtures.building(20));
+    const plane = world.add(fixtures.plane(10));
+    const building = world.add(fixtures.building(20));
     const invalid = [_]EntityId{
         .{ .pool = std.math.maxInt(usize), .slot = plane.slot, .generation = plane.generation },
         .{ .pool = plane.pool, .slot = std.math.maxInt(usize), .generation = plane.generation },
@@ -56,13 +55,13 @@ test "world removal isolates pools and rejects malformed or deleted IDs" {
 
     for (0..invalid.len) |index| {
         try testing.expect(world.get(fixtures.Plane, invalid[index]) == null);
-        try testing.expectError(error.InvalidEntity, world.remove(invalid[index]));
+        world.remove(invalid[index]);
     }
 
-    try world.remove(plane);
+    world.remove(plane);
 
     try testing.expect(world.get(fixtures.Plane, plane) == null);
-    try testing.expectError(error.InvalidEntity, world.remove(plane));
+    world.remove(plane);
 
     const surviving = (world.get(fixtures.Building, building) orelse return error.MissingEntity).durability;
 
@@ -73,15 +72,15 @@ test "world lookup follows moved entities through later pool growth" {
     var world = fixtures.GameWorld.init(testing.allocator);
     defer world.deinit();
 
-    const first = try world.add(fixtures.plane(10));
-    const second = try world.add(fixtures.plane(20));
-    const third = try world.add(fixtures.plane(30));
+    const first = world.add(fixtures.plane(10));
+    const second = world.add(fixtures.plane(20));
+    const third = world.add(fixtures.plane(30));
 
-    try world.remove(first);
+    world.remove(first);
 
     for (0..100) |index| {
         const value: f32 = @floatFromInt(index + 100);
-        _ = try world.add(fixtures.plane(value));
+        _ = world.add(fixtures.plane(value));
     }
 
     const second_health = (world.get(fixtures.Plane, second) orelse return error.MissingEntity).health;
@@ -92,86 +91,77 @@ test "world lookup follows moved entities through later pool growth" {
     try testing.expect(world.get(fixtures.Plane, first) == null);
 }
 
-test "world flush removes marked entities across pools and invalidates their IDs" {
+test "finishing a query removes dead entities across pools and invalidates their IDs" {
     var world = fixtures.GameWorld.init(testing.allocator);
     defer world.deinit();
 
-    const dead_plane = try world.add(fixtures.plane(0));
-    const living_plane = try world.add(fixtures.plane(10));
-    const dead_building = try world.add(fixtures.building(-1));
-    const living_building = try world.add(fixtures.building(20));
-    const bullet = try world.add(fixtures.bullet(30));
+    const dead_plane = world.add(fixtures.plane(0));
+    const living_plane = world.add(fixtures.plane(10));
+    const dead_building = world.add(fixtures.building(-1));
+    const living_building = world.add(fixtures.building(20));
+    const bullet = world.add(fixtures.bullet(30));
 
     var query = world.query(.{ .hp = fixtures.Health });
     defer query.deinit();
 
     while (query.next()) |components| {
-        if (components.hp.current <= 0) try query.markForRemoval();
+        if (components.hp.current <= 0) world.remove(query.entityId());
     }
 
-    try testing.expect(world.get(fixtures.Plane, dead_plane) != null);
-    try testing.expect(world.get(fixtures.Building, dead_building) != null);
+    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
+    try testing.expectEqual(1, world.pool(fixtures.Building).len());
 
     query.deinit();
 
-    try testing.expectEqual(2, try world.flushRemovals());
-    try testing.expectEqual(0, try world.flushRemovals());
     try testing.expect(world.get(fixtures.Plane, dead_plane) == null);
     try testing.expect(world.get(fixtures.Building, dead_building) == null);
     try testing.expect(world.get(fixtures.Plane, living_plane) != null);
     try testing.expect(world.get(fixtures.Building, living_building) != null);
     try testing.expect(world.get(fixtures.Bullet, bullet) != null);
 
-    const replacement = try world.add(fixtures.building(99));
+    const replacement = world.add(fixtures.building(99));
 
     try testing.expectEqual(dead_building.slot, replacement.slot);
     try testing.expect(world.get(fixtures.Building, dead_building) == null);
 }
 
-test "blocked world flush leaves earlier unlocked pools untouched" {
-    const GameWorld = World(.{ fixtures.Building, fixtures.Plane, fixtures.Bullet });
-
-    var world = GameWorld.init(testing.allocator);
+test "removal is immediate outside a query even when another pool is occupied" {
+    var world = fixtures.GameWorld.init(testing.allocator);
     defer world.deinit();
 
-    const building = try world.add(fixtures.building(0));
-    const plane = try world.add(fixtures.plane(0));
-
-    try world.markForRemoval(building);
-    try world.markForRemoval(plane);
-
+    const building = world.add(fixtures.building(0));
+    const plane = world.add(fixtures.plane(0));
     var query = world.query(.{ .motion = fixtures.Motion });
     defer query.deinit();
 
-    try testing.expectError(error.PoolInUse, world.flushRemovals());
-    try testing.expect(world.get(fixtures.Building, building) != null);
-    try testing.expect(world.get(fixtures.Plane, plane) != null);
+    world.remove(building);
+    world.remove(plane);
+
+    try testing.expectEqual(0, world.pool(fixtures.Building).len());
+    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
+    try testing.expect(world.get(fixtures.Plane, plane) == null);
 
     query.deinit();
-
-    try testing.expectEqual(2, try world.flushRemovals());
-    try testing.expect(world.get(fixtures.Building, building) == null);
-    try testing.expect(world.get(fixtures.Plane, plane) == null);
+    try testing.expectEqual(0, world.pool(fixtures.Plane).len());
 }
 
-test "failed world insertion leaves other pools intact and can be retried" {
-    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 1 });
-    var world = fixtures.GameWorld.init(failing.allocator());
+test "an old ID cannot remove its replacement after deferred cleanup" {
+    var world = fixtures.GameWorld.init(testing.allocator);
     defer world.deinit();
 
-    const plane = try world.add(fixtures.plane(10));
+    const removed = world.add(fixtures.plane(10));
+    var iterator = world.pool(fixtures.Plane).iterator();
+    defer iterator.deinit();
 
-    try testing.expectError(error.OutOfMemory, world.add(fixtures.building(20)));
-    try testing.expectEqual(0, world.pool(fixtures.Building).len());
+    world.remove(removed);
+    iterator.deinit();
+    const replacement = world.add(fixtures.plane(20));
+    world.remove(removed);
 
-    const health = (world.get(fixtures.Plane, plane) orelse return error.MissingEntity).health;
-
-    try testing.expectEqual(10, health.current);
-
-    failing.fail_index = std.math.maxInt(usize);
-    const building = try world.add(fixtures.building(20));
-
-    try testing.expect(world.get(fixtures.Building, building) != null);
+    try testing.expectEqual(removed.slot, replacement.slot);
+    try testing.expect(removed.generation != replacement.generation);
+    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
+    try testing.expectEqual(20, world.get(fixtures.Plane, replacement).?.health.current);
 }
 
 test "mixed world operations agree with a logical entity model" {
@@ -187,6 +177,8 @@ test "mixed world operations agree with a logical entity model" {
     defer world.deinit();
 
     var records: [64]?Record = @splat(null);
+    var guard: ?@TypeOf(world.pool(fixtures.Plane).iterator()) = null;
+    defer if (guard) |*iterator| iterator.deinit();
     var prng = std.Random.DefaultPrng.init(0x53484d454353);
     const random = prng.random();
 
@@ -197,10 +189,10 @@ test "mixed world operations agree with a logical entity model" {
             0 => {
                 const can_add = if (records[selected]) |record| !record.live else true;
 
-                if (can_add) {
+                if (can_add and guard == null) {
                     const value: f32 = @floatFromInt(step + 1);
                     records[selected] = .{
-                        .id = try world.add(fixtures.plane(value)),
+                        .id = world.add(fixtures.plane(value)),
                         .health = value,
                         .x = value,
                     };
@@ -210,9 +202,9 @@ test "mixed world operations agree with a logical entity model" {
             1 => {
                 if (records[selected]) |*record| {
                     if (record.live) {
-                        try world.remove(record.id);
+                        world.remove(record.id);
                         record.live = false;
-                        record.pending = false;
+                        record.pending = guard != null;
                     }
                 }
             },
@@ -220,30 +212,27 @@ test "mixed world operations agree with a logical entity model" {
             2 => {
                 if (records[selected]) |*record| {
                     if (record.live) {
-                        try world.markForRemoval(record.id);
+                        if (guard == null) guard = world.pool(fixtures.Plane).iterator();
+
+                        world.remove(record.id);
+                        record.live = false;
                         record.pending = true;
                     }
                 }
             },
 
             3 => {
-                const removed = try world.flushRemovals();
-                var expected: usize = 0;
+                if (guard) |*iterator| iterator.deinit();
+                guard = null;
 
                 for (0..records.len) |index| {
-                    if (records[index]) |*record| {
-                        if (record.live and record.pending) {
-                            record.live = false;
-                            record.pending = false;
-                            expected += 1;
-                        }
-                    }
+                    if (records[index]) |*record| record.pending = false;
                 }
-
-                try testing.expectEqual(expected, removed);
             },
 
-            4 => try world.pool(fixtures.Plane).reserve(random.uintLessThan(usize, 128) + 1),
+            4 => {
+                if (guard == null) world.pool(fixtures.Plane).reserve(random.uintLessThan(usize, 128) + 1);
+            },
             5 => {
                 var query = world.query(.{ .hp = fixtures.Health, .movement = fixtures.Motion });
                 defer query.deinit();
@@ -269,8 +258,9 @@ test "mixed world operations agree with a logical entity model" {
 
         for (0..records.len) |index| {
             if (records[index]) |record| {
+                if (record.live or record.pending) expected_count += 1;
+
                 if (record.live) {
-                    expected_count += 1;
                     const health = (world.get(fixtures.Plane, record.id) orelse return error.MissingEntity).health;
                     const motion = (world.get(fixtures.Plane, record.id) orelse return error.MissingEntity).motion;
 

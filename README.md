@@ -1,32 +1,34 @@
 # shmecs
 
-Dense component arrays, fixed entity types, and queries by component type.
+<img src="logo.png" alt="shmecs logo" width="280">
 
-Each entity type has its own pool. Top-level fields live in separate arrays;
-fields within a component stay together.
+Typed storage with dense arrays. Iterate over things of one type or shared parts across types.
 
-Register entity types, add a value, and keep its ID:
+Each thing type has its own storage. Top-level fields live in separate arrays;
+fields within a part stay together.
+
+Register thing types, add a value, and keep its ID:
 
 ```zig
-const GameWorld = shmecs.World(.{ Plane, Building, Bullet });
+const GameStore = shmecs.Store(.{ Plane, Building, Bullet });
 
-var world = GameWorld.init(allocator);
-defer world.deinit();
+var store = GameStore.init(allocator);
+defer store.deinit();
 
-const player_id = try world.add(player_plane);
+const player_id = store.add(player_plane);
 
-if (world.get(Plane, player_id)) |plane| {
+if (store.get(Plane, player_id)) |plane| {
     plane.health.current -= 10;
 }
 ```
 
-IDs survive storage growth and reordering. `get` returns component pointers,
-or `null` for an invalid ID or a different entity type.
+IDs survive storage growth and reordering. `get` returns part pointers,
+or `null` for an invalid ID or a different thing type.
 
-Iterate over one entity type:
+Iterate over one thing type:
 
 ```zig
-var planes = world.pool(Plane).iterator();
+var planes = store.things(Plane);
 defer planes.deinit();
 
 while (planes.next()) |plane| {
@@ -34,34 +36,50 @@ while (planes.next()) |plane| {
 }
 ```
 
-Query shared components across entity types, such as `Health` in planes and buildings:
+Iterate over shared parts across thing types, such as `Health` in planes and buildings:
 
 ```zig
-_ = try world.add(Building{
+_ = store.add(Building{
     .health = .{ .current = 0, .maximum = 200 },
     .appearance = .{ .sprite = 2 },
 });
 
-var query = world.query(.{ .health = Health });
-defer query.deinit();
+var parts = store.parts(.{ .health = Health });
+defer parts.deinit();
 
-while (query.next()) |components| {
-    if (components.health.current <= 0) try query.markForRemoval();
+while (parts.next()) |part| {
+    if (part.health.current <= 0) store.remove(parts.entityId());
 }
-
-_ = try world.flushRemovals();
 ```
 
-Both iterators expose `id()` and `markForRemoval()` for the current entity.
-Use `world.markForRemoval(id)` to mark by ID, or `world.remove(id)` to remove immediately.
-Removal invalidates the entity's ID.
+Both iterators expose `entityId()` for the current thing. `store.remove(id)` removes
+immediately when its storage is free, or defers physical removal until the last iterator
+finishes. Removed things disappear from iterators and `get` immediately; repeated
+removal is harmless. No manual flush is needed.
 
-Pools also expose `len()`, `components(Component)` for a mutable slice,
-and optional `reserve(capacity)`.
+`things` exposes `.len`, the stored row count when the iterator opens.
+Use `store.count(Plane)` for the current count without opening an iterator,
+and `store.reserve(Plane, capacity)` to preallocate storage.
 
-- Always close iterators with `deinit()` before flushing removals. Open iterators block structural changes to affected pools.
-- Keep IDs for long-lived references; storage growth and removal can invalidate component pointers.
-- Component types within an entity must be unique. Do not copy worlds or active iterators.
+Copy or restore state between initialized stores of the same type:
+
+```zig
+var snapshot = GameStore.init(allocator);
+defer snapshot.deinit();
+
+snapshot.copyFrom(&store);
+store.copyFrom(&snapshot);
+```
+
+`copyFrom` preserves IDs and row order, reuses destination capacity, and requires
+both stores to have no active iterators. Part values are copied; pointers and slices
+inside parts still refer to their original targets. Reacquire part pointers after restoring.
+
+- Full iteration closes automatically. Keep `defer iterator.deinit()` for early exits; cleanup on `break` happens when its enclosing scope ends.
+- Adding or reserving a type with active iterators is a programming error. `add`, `reserve`, and `copyFrom` panic on allocation failure.
+- Counts include pending removals until cleanup; iterators skip them immediately.
+- Keep IDs for long-lived references; storage growth and removal can invalidate part pointers.
+- Part types within a thing must be unique. Do not copy stores by assignment or copy active iterators.
 
 Complete example: [src/main.zig](src/main.zig).
 
