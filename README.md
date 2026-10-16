@@ -7,6 +7,28 @@ Typed storage with dense arrays. Iterate over things of one type or shared parts
 Each thing type has its own storage. Top-level fields live in separate arrays;
 fields within a part stay together.
 
+```text
+Store
++-- Plane
+|   health      [Health 0][Health 1]...
+|   motion      [Motion 0][Motion 1]...
+|   weapon      [Weapon 0][Weapon 1]...
+|   appearance  [Appearance 0][Appearance 1]...
+|   metadata
++-- Building
+|   health      [Health 0][Health 1]...
+|   appearance  [Appearance 0][Appearance 1]...
+|   metadata
++-- Bullet
+    motion      [Motion 0][Motion 1]...
+    appearance  [Appearance 0][Appearance 1]...
+    metadata
+```
+
+Each type uses one allocation; alignment and spare capacity are omitted above.
+Within a type, matching indices belong to the same thing. Each `Health` holds
+`{ current, maximum }` together; planes and buildings have separate health arrays.
+
 Register thing types, add a value, and keep its ID:
 
 ```zig
@@ -72,7 +94,6 @@ var snapshot = GameStore.init(allocator);
 defer snapshot.deinit();
 
 snapshot.copyFrom(&store);
-store.copyFrom(&snapshot);
 ```
 
 `copyFrom` preserves IDs and row order, reuses destination capacity, and requires
