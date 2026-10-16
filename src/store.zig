@@ -6,7 +6,11 @@ const identity = @import("thing_id.zig");
 const ThingId = identity.ThingId;
 
 pub fn Store(comptime thing_types: anytype) type {
-    comptime schema.validateTypes(thing_types);
+    comptime {
+        schema.validateTypes(thing_types);
+
+        if (thing_types.len > identity.invalid_index) @compileError("Too many thing types");
+    }
 
     const Pools = comptime init: {
         var types: [thing_types.len]type = undefined;

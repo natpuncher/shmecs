@@ -1,10 +1,11 @@
 const std = @import("std");
-const Slot = @import("thing_id.zig").Slot;
+const identity = @import("thing_id.zig");
+const Slot = identity.Slot;
 
 pub fn StorageLayout(comptime Entity: type) type {
     const fields = std.meta.fields(Entity);
     const block_alignment = comptime init: {
-        var alignment: usize = @max(@alignOf(Slot), @alignOf(usize));
+        var alignment: usize = @max(@alignOf(Slot), @alignOf(u32));
 
         for (fields) |field| alignment = @max(alignment, @alignOf(field.type));
 
@@ -23,6 +24,8 @@ pub fn StorageLayout(comptime Entity: type) type {
         size: usize,
 
         pub fn calculate(capacity: usize) std.mem.Allocator.Error!This {
+            if (capacity > identity.invalid_index) return error.OutOfMemory;
+
             var layout: This = undefined;
             var offset: usize = 0;
 
@@ -31,7 +34,7 @@ pub fn StorageLayout(comptime Entity: type) type {
             }
 
             layout.slots_offset = try appendRegion(Slot, &offset, capacity);
-            layout.dense_to_slot_offset = try appendRegion(usize, &offset, capacity);
+            layout.dense_to_slot_offset = try appendRegion(u32, &offset, capacity);
             layout.removal_flags_offset = try appendRegion(bool, &offset, capacity);
             layout.size = offset;
 

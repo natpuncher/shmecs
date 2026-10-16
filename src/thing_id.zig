@@ -1,15 +1,15 @@
 const std = @import("std");
 
 pub const ThingId = struct {
-    pool: usize,
-    slot: usize,
-    generation: u64,
+    pool: u32,
+    slot: u32,
+    generation: u32,
 };
 
-pub const invalid_index = std.math.maxInt(usize);
+pub const invalid_index = std.math.maxInt(u32);
 
 pub const Slot = struct {
-    dense_index: usize,
-    generation: u64 = 1,
-    next_free: usize = invalid_index,
+    dense_index: u32,
+    generation: u32 = 1,
+    next_free: u32 = invalid_index,
 };

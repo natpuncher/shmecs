@@ -25,10 +25,10 @@ pub fn PoolStorage(comptime Entity: type) type {
         columns: Columns = emptyColumns(),
         removal_flags: []bool = &.{},
         slots: []Slot = &.{},
-        dense_to_slot: []usize = &.{},
+        dense_to_slot: []u32 = &.{},
         slot_count: usize = 0,
-        free_slot: usize = invalid_index,
-        pool_index: usize = 0,
+        free_slot: u32 = invalid_index,
+        pool_index: u32 = 0,
         len: usize = 0,
         capacity: usize = 0,
         active_iterators: usize = 0,
@@ -83,12 +83,12 @@ pub fn PoolStorage(comptime Entity: type) type {
                 try this.reserve(try this.growthCapacity(required));
             }
 
-            const slot_index = if (this.free_slot != invalid_index) this.free_slot else this.slot_count;
+            const slot_index: u32 = if (this.free_slot != invalid_index) this.free_slot else @intCast(this.slot_count);
 
             if (this.free_slot != invalid_index) {
                 this.free_slot = this.slots[slot_index].next_free;
             } else {
-                this.slots[slot_index] = .{ .dense_index = this.len };
+                this.slots[slot_index] = .{ .dense_index = @intCast(this.len) };
                 this.slot_count += 1;
             }
 
@@ -99,7 +99,7 @@ pub fn PoolStorage(comptime Entity: type) type {
             }
 
             this.removal_flags[index] = false;
-            this.slots[slot_index].dense_index = index;
+            this.slots[slot_index].dense_index = @intCast(index);
             this.slots[slot_index].next_free = invalid_index;
             this.dense_to_slot[index] = slot_index;
             this.len += 1;
@@ -185,8 +185,10 @@ pub fn PoolStorage(comptime Entity: type) type {
         }
 
         fn growthCapacity(this: *const This, required: usize) std.mem.Allocator.Error!usize {
+            if (required > invalid_index) return error.OutOfMemory;
+
             const increment = @max(this.capacity / 2, 8);
-            const capacity = std.math.add(usize, this.capacity, increment) catch return error.OutOfMemory;
+            const capacity = @min(this.capacity +| increment, invalid_index);
 
             return @max(required, capacity);
         }
@@ -211,7 +213,7 @@ pub fn PoolStorage(comptime Entity: type) type {
             const slot_pointer: [*]Slot = @ptrCast(@alignCast(memory.ptr + layout.slots_offset));
             storage.slots = slot_pointer[0..capacity];
 
-            const dense_to_slot_pointer: [*]usize = @ptrCast(@alignCast(memory.ptr + layout.dense_to_slot_offset));
+            const dense_to_slot_pointer: [*]u32 = @ptrCast(@alignCast(memory.ptr + layout.dense_to_slot_offset));
             storage.dense_to_slot = dense_to_slot_pointer[0..capacity];
 
             return storage;
@@ -250,7 +252,7 @@ pub fn PoolStorage(comptime Entity: type) type {
 
                 const moved_slot = this.dense_to_slot[last];
                 this.dense_to_slot[index] = moved_slot;
-                this.slots[moved_slot].dense_index = index;
+                this.slots[moved_slot].dense_index = @intCast(index);
                 this.removal_flags[index] = this.removal_flags[last];
             }
 
@@ -274,9 +276,9 @@ pub fn PoolStorage(comptime Entity: type) type {
             this.free_slot = free_slot;
         }
 
-        fn recycleSlot(slot: *Slot, slot_index: usize, free_slot: usize) usize {
+        fn recycleSlot(slot: *Slot, slot_index: u32, free_slot: u32) u32 {
             slot.dense_index = invalid_index;
-            if (slot.generation == std.math.maxInt(u64)) return free_slot;
+            if (slot.generation == std.math.maxInt(u32)) return free_slot;
 
             slot.generation += 1;
             slot.next_free = free_slot;

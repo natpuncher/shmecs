@@ -95,14 +95,14 @@ pub fn PartsIterator(comptime StoreType: type, comptime thing_types: anytype, co
 
         store: *StoreType,
         next_pool_index: usize = 0,
-        current_pool_index: usize = 0,
+        current_pool_index: u32 = 0,
         next_index: usize = 0,
         current_index: ?usize = null,
         active: bool = true,
         columns: Columns = emptyColumns(),
         pool_len: usize = 0,
         slots: []const Slot = &.{},
-        dense_to_slot: []const usize = &.{},
+        dense_to_slot: []const u32 = &.{},
         removal_flags: []bool = &.{},
 
         pub fn init(store: *StoreType) This {
