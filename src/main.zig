@@ -73,7 +73,7 @@ pub fn main() void {
 
     while (parts.next()) |part| {
         if (part.health.current <= 0) {
-            store.remove(parts.entityId());
+            store.remove(parts.thingId());
         }
     }
 
@@ -88,7 +88,7 @@ fn regenerate(store: *GameStore, amount: f32) void {
         const health = part.health;
         health.current = @min(health.maximum, health.current + amount);
 
-        const id = parts.entityId();
+        const id = parts.thingId();
         std.debug.print("Entity {d}:{d}: hp={d}\n", .{ id.pool, id.slot, health.current });
     }
 }

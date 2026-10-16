@@ -1,14 +1,14 @@
 const std = @import("std");
 const testing = std.testing;
 const PoolStorage = @import("../pool_storage.zig").PoolStorage;
-const EntityId = @import("../entity_id.zig").EntityId;
+const ThingId = @import("../thing_id.zig").ThingId;
 const fixtures = @import("fixtures.zig");
 
 test "pool preserves component values and IDs across automatic growth" {
     var pool = PoolStorage(fixtures.Plane).init(testing.allocator);
     defer pool.deinit();
 
-    var ids: [96]EntityId = undefined;
+    var ids: [96]ThingId = undefined;
 
     for (0..ids.len) |index| {
         const value: f32 = @floatFromInt(index);
@@ -99,7 +99,7 @@ test "pool rejects invalid pool slot and generation without changing data" {
     defer pool.deinit();
 
     const valid = try pool.append(fixtures.plane(10));
-    const invalid = [_]EntityId{
+    const invalid = [_]ThingId{
         .{ .pool = valid.pool + 1, .slot = valid.slot, .generation = valid.generation },
         .{ .pool = valid.pool, .slot = std.math.maxInt(usize), .generation = valid.generation },
         .{ .pool = valid.pool, .slot = valid.slot, .generation = valid.generation + 1 },
@@ -118,7 +118,7 @@ test "pool removes first last and moved entities until empty" {
     var pool = PoolStorage(fixtures.Plane).init(testing.allocator);
     defer pool.deinit();
 
-    const ids = [_]EntityId{
+    const ids = [_]ThingId{
         try pool.append(fixtures.plane(10)),
         try pool.append(fixtures.plane(20)),
         try pool.append(fixtures.plane(30)),
@@ -195,7 +195,7 @@ test "deferred removal handles adjacent rows and duplicate requests exactly once
     var pool = PoolStorage(fixtures.Plane).init(testing.allocator);
     defer pool.deinit();
 
-    var ids: [5]EntityId = undefined;
+    var ids: [5]ThingId = undefined;
 
     for (0..ids.len) |index| {
         const value: f32 = @floatFromInt(index);

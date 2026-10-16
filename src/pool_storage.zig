@@ -2,10 +2,10 @@ const std = @import("std");
 const schema = @import("schema.zig");
 const StorageLayout = @import("storage_layout.zig").StorageLayout;
 const ThingsIterator = @import("iterators.zig").ThingsIterator;
-const identity = @import("entity_id.zig");
-const EntityId = identity.EntityId;
+const identity = @import("thing_id.zig");
+const ThingId = identity.ThingId;
 const Slot = identity.Slot;
-const vacant_index = identity.vacant_index;
+const invalid_index = identity.invalid_index;
 
 pub fn PoolStorage(comptime Entity: type) type {
     comptime schema.validateEntity(Entity);
@@ -27,7 +27,7 @@ pub fn PoolStorage(comptime Entity: type) type {
         slots: []Slot = &.{},
         dense_to_slot: []usize = &.{},
         slot_count: usize = 0,
-        free_slot: usize = vacant_index,
+        free_slot: usize = invalid_index,
         pool_index: usize = 0,
         len: usize = 0,
         capacity: usize = 0,
@@ -102,19 +102,19 @@ pub fn PoolStorage(comptime Entity: type) type {
             this.has_pending_removals = false;
         }
 
-        pub fn append(this: *This, entity: Entity) std.mem.Allocator.Error!EntityId {
+        pub fn append(this: *This, entity: Entity) std.mem.Allocator.Error!ThingId {
             std.debug.assert(this.active_iterators == 0);
 
-            if (this.free_slot == vacant_index and this.slot_count == this.capacity) {
+            if (this.free_slot == invalid_index and this.slot_count == this.capacity) {
                 const increment = @max(this.capacity / 2, 8);
                 const capacity = std.math.add(usize, this.capacity, increment) catch return error.OutOfMemory;
 
                 try this.reserve(capacity);
             }
 
-            const slot_index = if (this.free_slot != vacant_index) this.free_slot else this.slot_count;
+            const slot_index = if (this.free_slot != invalid_index) this.free_slot else this.slot_count;
 
-            if (this.free_slot != vacant_index) {
+            if (this.free_slot != invalid_index) {
                 this.free_slot = this.slots[slot_index].next_free;
             } else {
                 this.slots[slot_index] = .{ .dense_index = this.len };
@@ -129,7 +129,7 @@ pub fn PoolStorage(comptime Entity: type) type {
 
             this.removal_flags[index] = false;
             this.slots[slot_index].dense_index = index;
-            this.slots[slot_index].next_free = vacant_index;
+            this.slots[slot_index].next_free = invalid_index;
             this.dense_to_slot[index] = slot_index;
             this.len += 1;
 
@@ -140,7 +140,7 @@ pub fn PoolStorage(comptime Entity: type) type {
             };
         }
 
-        pub fn indexOf(this: *const This, id: EntityId) ?usize {
+        pub fn indexOf(this: *const This, id: ThingId) ?usize {
             if (id.pool != this.pool_index or id.slot >= this.slot_count) return null;
 
             const slot = this.slots[id.slot];
@@ -150,7 +150,7 @@ pub fn PoolStorage(comptime Entity: type) type {
             return slot.dense_index;
         }
 
-        pub fn remove(this: *This, id: EntityId) void {
+        pub fn remove(this: *This, id: ThingId) void {
             const index = this.indexOf(id) orelse return;
 
             if (this.active_iterators != 0) {
@@ -219,7 +219,7 @@ pub fn PoolStorage(comptime Entity: type) type {
 
             this.removal_flags[last] = false;
             this.len = last;
-            this.slots[slot_index].dense_index = vacant_index;
+            this.slots[slot_index].dense_index = invalid_index;
 
             if (this.slots[slot_index].generation < std.math.maxInt(u64)) {
                 this.slots[slot_index].generation += 1;

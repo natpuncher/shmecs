@@ -48,11 +48,11 @@ var parts = store.parts(.{ .health = Health });
 defer parts.deinit();
 
 while (parts.next()) |part| {
-    if (part.health.current <= 0) store.remove(parts.entityId());
+    if (part.health.current <= 0) store.remove(parts.thingId());
 }
 ```
 
-Both iterators expose `entityId()` for the current thing. `store.remove(id)` removes
+Both iterators expose `thingId()` for the current thing. `store.remove(id)` removes
 immediately when its storage is free, or defers physical removal until the last iterator
 finishes. Removed things disappear from iterators and `get` immediately; repeated
 removal is harmless. No manual flush is needed.

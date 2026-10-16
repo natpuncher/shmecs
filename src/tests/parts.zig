@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const fixtures = @import("fixtures.zig");
-const EntityId = @import("../entity_id.zig").EntityId;
+const ThingId = @import("../thing_id.zig").ThingId;
 
 test "automatic removal hides pending rows before iterator cleanup" {
     var world = fixtures.GameWorld.init(testing.allocator);
@@ -13,7 +13,7 @@ test "automatic removal hides pending rows before iterator cleanup" {
     defer holder.deinit();
 
     _ = holder.next() orelse return error.MissingEntity;
-    world.remove(holder.entityId());
+    world.remove(holder.thingId());
 
     try testing.expect(world.get(fixtures.Plane, removed) == null);
     try testing.expectEqual(2, world.pool(fixtures.Plane).len());
@@ -24,7 +24,7 @@ test "automatic removal hides pending rows before iterator cleanup" {
     const row = query.next() orelse return error.MissingEntity;
 
     try testing.expectEqual(20, row.hp.current);
-    try testing.expectEqualDeep(survivor, query.entityId());
+    try testing.expectEqualDeep(survivor, query.thingId());
     try testing.expect(query.next() == null);
     try testing.expectEqual(2, world.pool(fixtures.Plane).len());
 
@@ -44,7 +44,7 @@ test "automatic removal cleans up when an unfinished iterator closes" {
     defer iterator.deinit();
 
     _ = iterator.next() orelse return error.MissingEntity;
-    world.remove(iterator.entityId());
+    world.remove(iterator.thingId());
     iterator.deinit();
     iterator.deinit();
 
@@ -61,7 +61,7 @@ test "named query visits all matching entities in pool order and mutates origina
     const third = world.add(fixtures.building(30));
     const bullet = world.add(fixtures.bullet(40));
 
-    const expected_ids = [_]EntityId{ first, second, third };
+    const expected_ids = [_]ThingId{ first, second, third };
     const expected_values = [_]f32{ 10, 20, 30 };
 
     var query = world.query(.{ .hp = fixtures.Health });
@@ -72,7 +72,7 @@ test "named query visits all matching entities in pool order and mutates origina
     while (query.next()) |components| {
         try testing.expect(count < expected_ids.len);
 
-        const id = query.entityId();
+        const id = query.thingId();
 
         try testing.expectEqualDeep(expected_ids[count], id);
         try testing.expectEqual(expected_values[count], components.hp.current);
@@ -117,7 +117,7 @@ test "multi component query joins fields of one entity and requires every reques
 
     const components = query.next() orelse return error.MissingEntity;
 
-    try testing.expectEqualDeep(plane, query.entityId());
+    try testing.expectEqualDeep(plane, query.thingId());
 
     components.durability.current = 7;
     components.movement.x = 8;
@@ -152,7 +152,7 @@ test "query skips empty matching pools before and after populated pools" {
     const row = query.next() orelse return error.MissingEntity;
 
     try testing.expectEqual(55, row.health.current);
-    try testing.expectEqualDeep(building, query.entityId());
+    try testing.expectEqualDeep(building, query.thingId());
     try testing.expect(query.next() == null);
     try testing.expect(query.next() == null);
 }
@@ -202,10 +202,10 @@ test "entity IDs follow yielded rows and a finished query remains closed" {
     defer query.deinit();
 
     _ = query.next() orelse return error.MissingEntity;
-    try testing.expectEqualDeep(first, query.entityId());
+    try testing.expectEqualDeep(first, query.thingId());
 
     _ = query.next() orelse return error.MissingEntity;
-    try testing.expectEqualDeep(second, query.entityId());
+    try testing.expectEqualDeep(second, query.thingId());
     try testing.expect(query.next() == null);
 
     _ = world.add(fixtures.plane(30));
@@ -234,7 +234,7 @@ test "active queries defer removal only in matching pools" {
     try testing.expect(world.get(fixtures.Plane, plane) == null);
 
     _ = query.next() orelse return error.MissingEntity;
-    try testing.expectEqualDeep(survivor, query.entityId());
+    try testing.expectEqualDeep(survivor, query.thingId());
     try testing.expect(query.next() == null);
     try testing.expectEqual(1, world.pool(fixtures.Plane).len());
 }
@@ -359,10 +359,10 @@ test "query iteration and automatic removal require no allocations" {
     var count: usize = 0;
 
     while (query.next()) |_| {
-        const id = query.entityId();
+        const id = query.thingId();
         try testing.expect(world.get(fixtures.Plane, id) != null or world.get(fixtures.Building, id) != null);
 
-        world.remove(query.entityId());
+        world.remove(query.thingId());
         count += 1;
     }
 
@@ -390,8 +390,8 @@ test "removing the current entity twice neither skips rows nor deletes survivors
 
     while (query.next()) |components| {
         if (components.health.current <= 0) {
-            world.remove(query.entityId());
-            world.remove(query.entityId());
+            world.remove(query.thingId());
+            world.remove(query.thingId());
         }
 
         count += 1;
@@ -416,14 +416,14 @@ test "query aliases can use names also used by iterator methods" {
 
     _ = world.add(fixtures.plane(10));
 
-    var query = world.query(.{ .entityId = fixtures.Health, .next = fixtures.Motion });
+    var query = world.query(.{ .thingId = fixtures.Health, .next = fixtures.Motion });
     defer query.deinit();
 
     const components = query.next() orelse return error.MissingEntity;
-    components.entityId.current = 15;
+    components.thingId.current = 15;
     components.next.x = 25;
 
-    try testing.expect(world.get(fixtures.Plane, query.entityId()) != null);
+    try testing.expect(world.get(fixtures.Plane, query.thingId()) != null);
     try testing.expectEqual(15, world.pool(fixtures.Plane).components(fixtures.Health)[0].current);
     try testing.expectEqual(25, world.pool(fixtures.Plane).components(fixtures.Motion)[0].x);
 }
@@ -439,11 +439,11 @@ test "a pool iterator skips pending rows and cleans up on exhaustion" {
     defer iterator.deinit();
 
     _ = iterator.next() orelse return error.MissingEntity;
-    try testing.expectEqualDeep(first, iterator.entityId());
+    try testing.expectEqualDeep(first, iterator.thingId());
     world.remove(skipped);
 
     const row = iterator.next() orelse return error.MissingEntity;
-    try testing.expectEqualDeep(last, iterator.entityId());
+    try testing.expectEqualDeep(last, iterator.thingId());
     try testing.expectEqual(30, row.health.current);
     try testing.expect(iterator.next() == null);
     try testing.expectEqual(2, world.pool(fixtures.Plane).len());
@@ -482,7 +482,7 @@ test "breaking an iteration cleans up at the enclosing scope boundary" {
         defer query.deinit();
 
         while (query.next()) |_| {
-            world.remove(query.entityId());
+            world.remove(query.thingId());
             break;
         }
 
@@ -500,7 +500,7 @@ test "an error return releases a query and applies pending removal" {
             defer query.deinit();
 
             _ = query.next() orelse return error.MissingEntity;
-            world.remove(query.entityId());
+            world.remove(query.thingId());
             return error.ExpectedExit;
         }
     };
@@ -531,18 +531,18 @@ test "exhausting an inner query preserves the outer cursor until it finishes" {
     defer inner.deinit();
 
     _ = inner.next() orelse return error.MissingEntity;
-    world.remove(inner.entityId());
+    world.remove(inner.thingId());
 
     _ = inner.next() orelse return error.MissingEntity;
-    try testing.expectEqualDeep(survivor, inner.entityId());
+    try testing.expectEqualDeep(survivor, inner.thingId());
     try testing.expect(inner.next() == null);
     try testing.expectEqual(2, world.pool(fixtures.Plane).len());
     try testing.expectEqual(10, row.hp.current);
-    try testing.expectEqualDeep(removed, outer.entityId());
+    try testing.expectEqualDeep(removed, outer.thingId());
 
     const next = outer.next() orelse return error.MissingEntity;
     try testing.expectEqual(20, next.hp.current);
-    try testing.expectEqualDeep(survivor, outer.entityId());
+    try testing.expectEqualDeep(survivor, outer.thingId());
     try testing.expect(outer.next() == null);
     try testing.expectEqual(1, world.pool(fixtures.Plane).len());
 }

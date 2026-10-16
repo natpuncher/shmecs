@@ -2,8 +2,8 @@ const std = @import("std");
 const schema = @import("schema.zig");
 const PartsIterator = @import("iterators.zig").PartsIterator;
 const PoolStorage = @import("pool_storage.zig").PoolStorage;
-const identity = @import("entity_id.zig");
-const EntityId = identity.EntityId;
+const identity = @import("thing_id.zig");
+const ThingId = identity.ThingId;
 
 pub fn Store(comptime thing_types: anytype) type {
     comptime schema.validateTypes(thing_types);
@@ -70,11 +70,11 @@ pub fn Store(comptime thing_types: anytype) type {
             this.storageFor(Thing).reserve(capacity) catch @panic("Out of memory");
         }
 
-        pub fn add(this: *This, thing: anytype) EntityId {
+        pub fn add(this: *This, thing: anytype) ThingId {
             return this.storageFor(@TypeOf(thing)).append(thing) catch @panic("Out of memory");
         }
 
-        pub fn get(this: *This, comptime Thing: type, id: EntityId) ?schema.EntityPointers(Thing) {
+        pub fn get(this: *This, comptime Thing: type, id: ThingId) ?schema.EntityPointers(Thing) {
             const storage = this.storageFor(Thing);
             const index = storage.indexOf(id) orelse return null;
             var thing: schema.EntityPointers(Thing) = undefined;
@@ -86,7 +86,7 @@ pub fn Store(comptime thing_types: anytype) type {
             return thing;
         }
 
-        pub fn remove(this: *This, id: EntityId) void {
+        pub fn remove(this: *This, id: ThingId) void {
             inline for (thing_types, 0..) |_, index| {
                 if (id.pool == index) return this.pools[index].remove(id);
             }

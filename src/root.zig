@@ -1,5 +1,5 @@
 pub const Store = @import("store.zig").Store;
-pub const EntityId = @import("entity_id.zig").EntityId;
+pub const ThingId = @import("thing_id.zig").ThingId;
 
 test {
     _ = @import("tests/pool_storage.zig");

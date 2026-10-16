@@ -1,5 +1,5 @@
 const std = @import("std");
-const Slot = @import("entity_id.zig").Slot;
+const Slot = @import("thing_id.zig").Slot;
 
 pub fn StorageLayout(comptime Entity: type) type {
     const fields = std.meta.fields(Entity);

@@ -1,7 +1,7 @@
 const std = @import("std");
 const schema = @import("schema.zig");
-const EntityId = @import("entity_id.zig").EntityId;
-const Slot = @import("entity_id.zig").Slot;
+const ThingId = @import("thing_id.zig").ThingId;
+const Slot = @import("thing_id.zig").Slot;
 
 pub fn ThingsIterator(comptime PoolType: type, comptime Thing: type) type {
     const fields = std.meta.fields(Thing);
@@ -48,7 +48,7 @@ pub fn ThingsIterator(comptime PoolType: type, comptime Thing: type) type {
             return null;
         }
 
-        pub fn entityId(this: *const This) EntityId {
+        pub fn thingId(this: *const This) ThingId {
             std.debug.assert(this.active and this.current_index != null);
             const row = this.current_index.?;
             const slot = this.pool.dense_to_slot[row];
@@ -135,7 +135,7 @@ pub fn PartsIterator(comptime StoreType: type, comptime thing_types: anytype, co
             }
         }
 
-        pub fn entityId(this: *const This) EntityId {
+        pub fn thingId(this: *const This) ThingId {
             std.debug.assert(this.active and this.current_index != null);
             const row = this.current_index.?;
             const slot = this.dense_to_slot[row];

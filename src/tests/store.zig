@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const EntityId = @import("../entity_id.zig").EntityId;
+const ThingId = @import("../thing_id.zig").ThingId;
 const fixtures = @import("fixtures.zig");
 
 test "world distinguishes entity types whose IDs share a slot" {
@@ -47,7 +47,7 @@ test "world removal ignores malformed or deleted IDs and isolates pools" {
 
     const plane = world.add(fixtures.plane(10));
     const building = world.add(fixtures.building(20));
-    const invalid = [_]EntityId{
+    const invalid = [_]ThingId{
         .{ .pool = std.math.maxInt(usize), .slot = plane.slot, .generation = plane.generation },
         .{ .pool = plane.pool, .slot = std.math.maxInt(usize), .generation = plane.generation },
         .{ .pool = plane.pool, .slot = plane.slot, .generation = plane.generation + 1 },
@@ -105,7 +105,7 @@ test "finishing a query removes dead entities across pools and invalidates their
     defer query.deinit();
 
     while (query.next()) |components| {
-        if (components.hp.current <= 0) world.remove(query.entityId());
+        if (components.hp.current <= 0) world.remove(query.thingId());
     }
 
     try testing.expectEqual(1, world.pool(fixtures.Plane).len());
@@ -166,7 +166,7 @@ test "an old ID cannot remove its replacement after deferred cleanup" {
 
 test "mixed world operations agree with a logical entity model" {
     const Record = struct {
-        id: EntityId,
+        id: ThingId,
         health: f32,
         x: f32,
         live: bool = true,

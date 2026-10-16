@@ -40,7 +40,7 @@ pub fn main(init: std.process.Init) !void {
     });
     std.debug.print("Entity components: {d} bytes; ID: {d}\n", .{
         @sizeOf(Motion) + @sizeOf(Health) + @sizeOf(Cold),
-        @sizeOf(shmecs.EntityId),
+        @sizeOf(shmecs.ThingId),
     });
     std.debug.print("storage_columns uses internal storage directly. Traversal includes iterator setup/teardown; removals include selection, removal, and automatic cleanup. Allocator: page_allocator.\n", .{});
 
@@ -262,7 +262,7 @@ fn benchmarkSpawn(io: std.Io, comptime reserved: bool) !void {
 }
 
 fn benchmarkRemovals(io: std.Io, comptime percentage: usize, comptime method: Removal) !void {
-    const ids = try allocator.alloc(shmecs.EntityId, entity_count);
+    const ids = try allocator.alloc(shmecs.ThingId, entity_count);
     defer allocator.free(ids);
 
     var timings: [sample_count]u64 = undefined;
@@ -296,7 +296,7 @@ fn benchmarkRemovals(io: std.Io, comptime percentage: usize, comptime method: Re
                 var index: usize = 0;
 
                 while (entities.next()) |_| {
-                    if (index % 100 < percentage) store.remove(entities.entityId());
+                    if (index % 100 < percentage) store.remove(entities.thingId());
 
                     index += 1;
                 }
@@ -307,7 +307,7 @@ fn benchmarkRemovals(io: std.Io, comptime percentage: usize, comptime method: Re
                 var index: usize = 0;
 
                 while (parts.next()) |_| {
-                    if (index % 100 < percentage) store.remove(parts.entityId());
+                    if (index % 100 < percentage) store.remove(parts.thingId());
 
                     index += 1;
                 }
