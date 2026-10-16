@@ -65,3 +65,112 @@ pub fn PoolIterator(comptime PoolType: type, comptime Entity: type) type {
         }
     };
 }
+
+pub fn Query(comptime WorldType: type, comptime entities: anytype, comptime components: anytype) type {
+    const required = comptime schema.queryTypes(components);
+    const query_fields = std.meta.fields(@TypeOf(components));
+
+    return struct {
+        const This = @This();
+
+        pub const Components = schema.ComponentPointers(components);
+
+        world: *WorldType,
+        pool_index: usize = 0,
+        next_index: usize = 0,
+        current_index: ?usize = null,
+        active: bool = true,
+
+        pub fn init(world: *WorldType) This {
+            inline for (entities, 0..) |Entity, index| {
+                if (comptime schema.matches(Entity, required)) {
+                    world.pools[index].active_iterators += 1;
+                }
+            }
+
+            return .{ .world = world };
+        }
+
+        pub fn next(this: *This) ?Components {
+            this.current_index = null;
+
+            if (!this.active) return null;
+
+            inline for (entities, 0..) |Entity, index| {
+                if (comptime schema.matches(Entity, required)) {
+                    if (this.pool_index <= index) {
+                        this.pool_index = index;
+                        const storage = &this.world.pools[index];
+
+                        if (this.next_index < storage.len) {
+                            const row = this.next_index;
+                            this.next_index += 1;
+                            var result: Components = undefined;
+
+                            inline for (query_fields) |field| {
+                                const Component = @field(components, field.name);
+                                @field(result, field.name) = &storage.components(Component)[row];
+                            }
+
+                            this.current_index = row;
+                            return result;
+                        }
+
+                        this.pool_index = index + 1;
+                        this.next_index = 0;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        pub fn id(this: *const This) ?EntityId {
+            const row = this.current_index orelse return null;
+
+            inline for (entities, 0..) |Entity, index| {
+                if (comptime schema.matches(Entity, required)) {
+                    if (this.pool_index == index) {
+                        const storage = &this.world.pools[index];
+                        const slot = storage.dense_to_slot[row];
+                        return .{
+                            .pool = index,
+                            .slot = slot,
+                            .generation = storage.slots[slot].generation,
+                        };
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        pub fn markForRemoval(this: *This) error{NoCurrentEntity}!void {
+            const row = this.current_index orelse return error.NoCurrentEntity;
+
+            inline for (entities, 0..) |Entity, index| {
+                if (comptime schema.matches(Entity, required)) {
+                    if (this.pool_index == index) {
+                        this.world.pools[index].removal_flags[row] = true;
+                        return;
+                    }
+                }
+            }
+
+            return error.NoCurrentEntity;
+        }
+
+        pub fn deinit(this: *This) void {
+            if (!this.active) return;
+
+            inline for (entities, 0..) |Entity, index| {
+                if (comptime schema.matches(Entity, required)) {
+                    this.world.pools[index].active_iterators -= 1;
+                }
+            }
+
+            this.current_index = null;
+            this.active = false;
+        }
+    };
+}

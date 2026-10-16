@@ -19,6 +19,8 @@ pub const Bullet = struct {
     appearance: Appearance,
 };
 
+pub const GameWorld = @import("../world.zig").World(.{ Plane, Building, Bullet });
+
 pub fn plane(value: f32) Plane {
     return .{
         .health = .{ .current = value, .maximum = 100 },
