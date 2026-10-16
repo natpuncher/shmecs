@@ -36,16 +36,19 @@ Iterate over one entity type:
 }
 ```
 
-Query all entities with the requested components:
+Query shared components across entity types, such as `Health` in planes and buildings:
 
 ```zig
-{
-    var query = world.query(.{ .health = Health });
-    defer query.deinit();
+_ = try world.add(Building{
+    .health = .{ .current = 0, .maximum = 200 },
+    .appearance = .{ .sprite = 2 },
+});
 
-    while (query.next()) |components| {
-        if (components.health.current <= 0) try query.markForRemoval();
-    }
+var query = world.query(.{ .health = Health });
+defer query.deinit();
+
+while (query.next()) |components| {
+    if (components.health.current <= 0) try query.markForRemoval();
 }
 
 _ = try world.flushRemovals();
