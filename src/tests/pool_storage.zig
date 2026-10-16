@@ -101,7 +101,7 @@ test "pool rejects invalid pool slot and generation without changing data" {
     const valid = try pool.append(fixtures.plane(10));
     const invalid = [_]ThingId{
         .{ .pool = valid.pool + 1, .slot = valid.slot, .generation = valid.generation },
-        .{ .pool = valid.pool, .slot = std.math.maxInt(usize), .generation = valid.generation },
+        .{ .pool = valid.pool, .slot = std.math.maxInt(u32), .generation = valid.generation },
         .{ .pool = valid.pool, .slot = valid.slot, .generation = valid.generation + 1 },
     };
 
@@ -373,8 +373,8 @@ test "exhausted generations retire slots instead of reviving stale IDs" {
 
     try pool.reserve(1);
     var last_generation = try pool.append(fixtures.plane(10));
-    pool.slots[last_generation.slot].generation = std.math.maxInt(u64);
-    last_generation.generation = std.math.maxInt(u64);
+    pool.slots[last_generation.slot].generation = std.math.maxInt(u32);
+    last_generation.generation = std.math.maxInt(u32);
 
     pool.remove(last_generation);
 

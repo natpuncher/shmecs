@@ -67,7 +67,9 @@ pub fn Store(comptime thing_types: anytype) type {
 
         pub fn count(this: *const This, comptime Thing: type) usize {
             const index = comptime schema.typeIndex(thing_types, Thing);
-            return this.pools[index].len;
+            const storage = &this.pools[index];
+
+            return storage.len - storage.pending_removals;
         }
 
         pub fn reserve(this: *This, comptime Thing: type, capacity: usize) void {

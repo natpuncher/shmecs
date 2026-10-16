@@ -4,75 +4,75 @@ const fixtures = @import("fixtures.zig");
 const ThingId = @import("../thing_id.zig").ThingId;
 
 test "automatic removal hides pending rows before iterator cleanup" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const removed = world.add(fixtures.plane(10));
-    const survivor = world.add(fixtures.plane(20));
-    var holder = world.pool(fixtures.Plane).iterator();
+    const removed = store.add(fixtures.plane(10));
+    const survivor = store.add(fixtures.plane(20));
+    var holder = store.things(fixtures.Plane);
     defer holder.deinit();
 
     _ = holder.next() orelse return error.MissingEntity;
-    world.remove(holder.thingId());
+    store.remove(holder.thingId());
 
-    try testing.expect(world.get(fixtures.Plane, removed) == null);
-    try testing.expectEqual(2, world.pool(fixtures.Plane).len());
+    try testing.expect(store.get(fixtures.Plane, removed) == null);
+    try testing.expectEqual(1, store.count(fixtures.Plane));
 
-    var query = world.query(.{ .hp = fixtures.Health });
-    defer query.deinit();
+    var parts = store.parts(.{ .hp = fixtures.Health });
+    defer parts.deinit();
 
-    const row = query.next() orelse return error.MissingEntity;
+    const row = parts.next() orelse return error.MissingEntity;
 
     try testing.expectEqual(20, row.hp.current);
-    try testing.expectEqualDeep(survivor, query.thingId());
-    try testing.expect(query.next() == null);
-    try testing.expectEqual(2, world.pool(fixtures.Plane).len());
+    try testing.expectEqualDeep(survivor, parts.thingId());
+    try testing.expect(parts.next() == null);
+    try testing.expectEqual(1, store.count(fixtures.Plane));
 
     holder.deinit();
 
-    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
-    try testing.expect(world.get(fixtures.Plane, survivor) != null);
+    try testing.expectEqual(1, store.count(fixtures.Plane));
+    try testing.expect(store.get(fixtures.Plane, survivor) != null);
 }
 
 test "automatic removal cleans up when an unfinished iterator closes" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const removed = world.add(fixtures.plane(10));
-    _ = world.add(fixtures.plane(20));
-    var iterator = world.pool(fixtures.Plane).iterator();
+    const removed = store.add(fixtures.plane(10));
+    _ = store.add(fixtures.plane(20));
+    var iterator = store.things(fixtures.Plane);
     defer iterator.deinit();
 
     _ = iterator.next() orelse return error.MissingEntity;
-    world.remove(iterator.thingId());
+    store.remove(iterator.thingId());
     iterator.deinit();
     iterator.deinit();
 
-    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
-    try testing.expect(world.get(fixtures.Plane, removed) == null);
+    try testing.expectEqual(1, store.count(fixtures.Plane));
+    try testing.expect(store.get(fixtures.Plane, removed) == null);
 }
 
-test "named query visits all matching entities in pool order and mutates original data" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "parts iteration visits matching things in type order and mutates original data" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const first = world.add(fixtures.plane(10));
-    const second = world.add(fixtures.plane(20));
-    const third = world.add(fixtures.building(30));
-    const bullet = world.add(fixtures.bullet(40));
+    const first = store.add(fixtures.plane(10));
+    const second = store.add(fixtures.plane(20));
+    const third = store.add(fixtures.building(30));
+    const bullet = store.add(fixtures.bullet(40));
 
     const expected_ids = [_]ThingId{ first, second, third };
     const expected_values = [_]f32{ 10, 20, 30 };
 
-    var query = world.query(.{ .hp = fixtures.Health });
-    defer query.deinit();
+    var parts = store.parts(.{ .hp = fixtures.Health });
+    defer parts.deinit();
 
     var count: usize = 0;
 
-    while (query.next()) |components| {
+    while (parts.next()) |components| {
         try testing.expect(count < expected_ids.len);
 
-        const id = query.thingId();
+        const id = parts.thingId();
 
         try testing.expectEqualDeep(expected_ids[count], id);
         try testing.expectEqual(expected_values[count], components.hp.current);
@@ -86,219 +86,219 @@ test "named query visits all matching entities in pool order and mutates origina
     const expected_after = [_]f32{ 15, 25, 35 };
 
     const healths = [_]*fixtures.Health{
-        (world.get(fixtures.Plane, first) orelse return error.MissingEntity).health,
-        (world.get(fixtures.Plane, second) orelse return error.MissingEntity).health,
-        (world.get(fixtures.Building, third) orelse return error.MissingEntity).durability,
+        (store.get(fixtures.Plane, first) orelse return error.MissingEntity).health,
+        (store.get(fixtures.Plane, second) orelse return error.MissingEntity).health,
+        (store.get(fixtures.Building, third) orelse return error.MissingEntity).durability,
     };
 
     for (healths, 0..) |health, index| {
         try testing.expectEqual(expected_after[index], health.current);
     }
 
-    const motion = (world.get(fixtures.Bullet, bullet) orelse return error.MissingEntity).movement;
+    const motion = (store.get(fixtures.Bullet, bullet) orelse return error.MissingEntity).movement;
 
     try testing.expectEqual(40, motion.x);
 }
 
-test "multi component query joins fields of one entity and requires every requested type" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "parts selection joins fields of one thing and requires every requested type" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const plane = world.add(fixtures.plane(40));
-    const building = world.add(fixtures.building(80));
-    const bullet = world.add(fixtures.bullet(90));
+    const plane = store.add(fixtures.plane(40));
+    const building = store.add(fixtures.building(80));
+    const bullet = store.add(fixtures.bullet(90));
 
-    var query = world.query(.{
+    var parts = store.parts(.{
         .movement = fixtures.Motion,
         .durability = fixtures.Health,
         .gun = fixtures.Weapon,
     });
-    defer query.deinit();
+    defer parts.deinit();
 
-    const components = query.next() orelse return error.MissingEntity;
+    const components = parts.next() orelse return error.MissingEntity;
 
-    try testing.expectEqualDeep(plane, query.thingId());
+    try testing.expectEqualDeep(plane, parts.thingId());
 
     components.durability.current = 7;
     components.movement.x = 8;
     components.gun.ammunition = 3;
 
-    try testing.expect(query.next() == null);
+    try testing.expect(parts.next() == null);
 
-    const health = (world.get(fixtures.Plane, plane) orelse return error.MissingEntity).health;
-    const motion = (world.get(fixtures.Plane, plane) orelse return error.MissingEntity).motion;
-    const weapon = (world.get(fixtures.Plane, plane) orelse return error.MissingEntity).weapon;
+    const health = (store.get(fixtures.Plane, plane) orelse return error.MissingEntity).health;
+    const motion = (store.get(fixtures.Plane, plane) orelse return error.MissingEntity).motion;
+    const weapon = (store.get(fixtures.Plane, plane) orelse return error.MissingEntity).weapon;
 
     try testing.expectEqual(7, health.current);
     try testing.expectEqual(8, motion.x);
     try testing.expectEqual(3, weapon.ammunition);
 
-    const untouched_health = (world.get(fixtures.Building, building) orelse return error.MissingEntity).durability;
-    const untouched_motion = (world.get(fixtures.Bullet, bullet) orelse return error.MissingEntity).movement;
+    const untouched_health = (store.get(fixtures.Building, building) orelse return error.MissingEntity).durability;
+    const untouched_motion = (store.get(fixtures.Bullet, bullet) orelse return error.MissingEntity).movement;
 
     try testing.expectEqual(80, untouched_health.current);
     try testing.expectEqual(90, untouched_motion.x);
 }
 
-test "query skips empty matching pools before and after populated pools" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "parts iteration skips empty matching types" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const building = world.add(fixtures.building(55));
+    const building = store.add(fixtures.building(55));
 
-    var query = world.query(.{ .health = fixtures.Health });
-    defer query.deinit();
+    var parts = store.parts(.{ .health = fixtures.Health });
+    defer parts.deinit();
 
-    const row = query.next() orelse return error.MissingEntity;
+    const row = parts.next() orelse return error.MissingEntity;
 
     try testing.expectEqual(55, row.health.current);
-    try testing.expectEqualDeep(building, query.thingId());
-    try testing.expect(query.next() == null);
-    try testing.expect(query.next() == null);
+    try testing.expectEqualDeep(building, parts.thingId());
+    try testing.expect(parts.next() == null);
+    try testing.expect(parts.next() == null);
 }
 
-test "empty world queries finish and release matching pools" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "parts iteration on an empty store releases matching types" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    var query = world.query(.{ .motion = fixtures.Motion });
-    defer query.deinit();
+    var parts = store.parts(.{ .motion = fixtures.Motion });
+    defer parts.deinit();
 
-    try testing.expect(query.next() == null);
-    try testing.expect(query.next() == null);
+    try testing.expect(parts.next() == null);
+    try testing.expect(parts.next() == null);
 
-    _ = world.add(fixtures.plane(10));
-    _ = world.add(fixtures.bullet(20));
+    _ = store.add(fixtures.plane(10));
+    _ = store.add(fixtures.bullet(20));
 
-    try testing.expect(query.next() == null);
-    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
-    try testing.expectEqual(1, world.pool(fixtures.Bullet).len());
+    try testing.expect(parts.next() == null);
+    try testing.expectEqual(1, store.count(fixtures.Plane));
+    try testing.expectEqual(1, store.count(fixtures.Bullet));
 }
 
-test "query for an absent component neither yields entities nor locks unrelated pools" {
+test "selecting an absent part neither yields things nor locks unrelated types" {
     const Missing = struct { number: i64 };
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    _ = world.add(fixtures.plane(10));
+    _ = store.add(fixtures.plane(10));
 
-    var query = world.query(.{ .missing = Missing });
-    defer query.deinit();
+    var parts = store.parts(.{ .missing = Missing });
+    defer parts.deinit();
 
-    try testing.expect(query.next() == null);
+    try testing.expect(parts.next() == null);
 
-    _ = world.add(fixtures.plane(20));
+    _ = store.add(fixtures.plane(20));
 
-    try testing.expectEqual(2, world.pool(fixtures.Plane).len());
+    try testing.expectEqual(2, store.count(fixtures.Plane));
 }
 
-test "entity IDs follow yielded rows and a finished query remains closed" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "thing IDs follow yielded rows and a finished parts iterator remains closed" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const first = world.add(fixtures.plane(10));
-    const second = world.add(fixtures.plane(20));
-    var query = world.query(.{ .hp = fixtures.Health });
-    defer query.deinit();
+    const first = store.add(fixtures.plane(10));
+    const second = store.add(fixtures.plane(20));
+    var parts = store.parts(.{ .hp = fixtures.Health });
+    defer parts.deinit();
 
-    _ = query.next() orelse return error.MissingEntity;
-    try testing.expectEqualDeep(first, query.thingId());
+    _ = parts.next() orelse return error.MissingEntity;
+    try testing.expectEqualDeep(first, parts.thingId());
 
-    _ = query.next() orelse return error.MissingEntity;
-    try testing.expectEqualDeep(second, query.thingId());
-    try testing.expect(query.next() == null);
+    _ = parts.next() orelse return error.MissingEntity;
+    try testing.expectEqualDeep(second, parts.thingId());
+    try testing.expect(parts.next() == null);
 
-    _ = world.add(fixtures.plane(30));
-    query.deinit();
+    _ = store.add(fixtures.plane(30));
+    parts.deinit();
 
-    try testing.expect(query.next() == null);
-    try testing.expectEqual(3, world.pool(fixtures.Plane).len());
+    try testing.expect(parts.next() == null);
+    try testing.expectEqual(3, store.count(fixtures.Plane));
 }
 
-test "active queries defer removal only in matching pools" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "active parts iterators defer removal only in matching pools" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const plane = world.add(fixtures.plane(10));
-    const survivor = world.add(fixtures.plane(20));
-    var query = world.query(.{ .weapon = fixtures.Weapon });
-    defer query.deinit();
+    const plane = store.add(fixtures.plane(10));
+    const survivor = store.add(fixtures.plane(20));
+    var parts = store.parts(.{ .weapon = fixtures.Weapon });
+    defer parts.deinit();
 
-    world.remove(plane);
-    world.remove(plane);
-    const building = world.add(fixtures.building(30));
-    world.remove(building);
+    store.remove(plane);
+    store.remove(plane);
+    const building = store.add(fixtures.building(30));
+    store.remove(building);
 
-    try testing.expectEqual(0, world.pool(fixtures.Building).len());
-    try testing.expectEqual(2, world.pool(fixtures.Plane).len());
-    try testing.expect(world.get(fixtures.Plane, plane) == null);
+    try testing.expectEqual(0, store.count(fixtures.Building));
+    try testing.expectEqual(1, store.count(fixtures.Plane));
+    try testing.expect(store.get(fixtures.Plane, plane) == null);
 
-    _ = query.next() orelse return error.MissingEntity;
-    try testing.expectEqualDeep(survivor, query.thingId());
-    try testing.expect(query.next() == null);
-    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
+    _ = parts.next() orelse return error.MissingEntity;
+    try testing.expectEqualDeep(survivor, parts.thingId());
+    try testing.expect(parts.next() == null);
+    try testing.expectEqual(1, store.count(fixtures.Plane));
 }
 
-test "closing a query releases matching empty pools for insertion" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "closing a parts iterator releases matching empty types for insertion" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    var query = world.query(.{ .health = fixtures.Health });
-    defer query.deinit();
+    var parts = store.parts(.{ .health = fixtures.Health });
+    defer parts.deinit();
 
-    _ = world.add(fixtures.bullet(30));
-    query.deinit();
+    _ = store.add(fixtures.bullet(30));
+    parts.deinit();
 
-    _ = world.add(fixtures.plane(10));
-    _ = world.add(fixtures.building(20));
+    _ = store.add(fixtures.plane(10));
+    _ = store.add(fixtures.building(20));
 
-    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
-    try testing.expectEqual(1, world.pool(fixtures.Building).len());
+    try testing.expectEqual(1, store.count(fixtures.Plane));
+    try testing.expectEqual(1, store.count(fixtures.Building));
 }
 
-test "nested queries clean each pool only after its last cursor closes" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "nested parts iterators clean each pool only after its last cursor closes" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const plane = world.add(fixtures.plane(10));
-    const survivor = world.add(fixtures.plane(20));
-    const building = world.add(fixtures.building(30));
-    var health = world.query(.{ .health = fixtures.Health });
+    const plane = store.add(fixtures.plane(10));
+    const survivor = store.add(fixtures.plane(20));
+    const building = store.add(fixtures.building(30));
+    var health = store.parts(.{ .health = fixtures.Health });
     defer health.deinit();
-    var motion = world.query(.{ .motion = fixtures.Motion });
+    var motion = store.parts(.{ .motion = fixtures.Motion });
     defer motion.deinit();
 
     const row = motion.next() orelse return error.MissingEntity;
-    world.remove(plane);
-    world.remove(building);
+    store.remove(plane);
+    store.remove(building);
     health.deinit();
     health.deinit();
 
-    try testing.expectEqual(0, world.pool(fixtures.Building).len());
-    try testing.expectEqual(2, world.pool(fixtures.Plane).len());
+    try testing.expectEqual(0, store.count(fixtures.Building));
+    try testing.expectEqual(1, store.count(fixtures.Plane));
     try testing.expectEqual(10, row.motion.x);
-    try testing.expect(world.get(fixtures.Plane, plane) == null);
+    try testing.expect(store.get(fixtures.Plane, plane) == null);
 
     motion.deinit();
 
-    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
-    try testing.expectEqual(20, world.get(fixtures.Plane, survivor).?.motion.x);
+    try testing.expectEqual(1, store.count(fixtures.Plane));
+    try testing.expectEqual(20, store.get(fixtures.Plane, survivor).?.motion.x);
 }
 
-test "exhaustion and closing an unfinished query both release its pools" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "exhaustion and closing an unfinished parts iterator both release its types" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    _ = world.add(fixtures.plane(10));
-    var query = world.query(.{ .weapon = fixtures.Weapon });
-    defer query.deinit();
+    _ = store.add(fixtures.plane(10));
+    var parts = store.parts(.{ .weapon = fixtures.Weapon });
+    defer parts.deinit();
 
-    while (query.next()) |_| {}
+    while (parts.next()) |_| {}
 
-    _ = world.add(fixtures.plane(20));
-    query.deinit();
+    _ = store.add(fixtures.plane(20));
+    parts.deinit();
 
-    var unfinished = world.query(.{ .weapon = fixtures.Weapon });
+    var unfinished = store.parts(.{ .weapon = fixtures.Weapon });
     defer unfinished.deinit();
 
     _ = unfinished.next() orelse return error.MissingEntity;
@@ -306,21 +306,21 @@ test "exhaustion and closing an unfinished query both release its pools" {
 
     try testing.expect(unfinished.next() == null);
 
-    _ = world.add(fixtures.plane(30));
-    try testing.expectEqual(3, world.pool(fixtures.Plane).len());
+    _ = store.add(fixtures.plane(30));
+    try testing.expectEqual(3, store.count(fixtures.Plane));
 }
 
-test "independent query cursors preserve earlier pointers and observe shared mutations" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "independent parts iterators preserve earlier pointers and observe shared mutations" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    _ = world.add(fixtures.plane(10));
-    _ = world.add(fixtures.plane(20));
+    _ = store.add(fixtures.plane(10));
+    _ = store.add(fixtures.plane(20));
 
-    var first = world.query(.{ .health = fixtures.Health });
+    var first = store.parts(.{ .health = fixtures.Health });
     defer first.deinit();
 
-    var second = world.query(.{ .hp = fixtures.Health });
+    var second = store.parts(.{ .hp = fixtures.Health });
     defer second.deinit();
 
     const first_row = first.next() orelse return error.MissingEntity;
@@ -344,54 +344,54 @@ test "independent query cursors preserve earlier pointers and observe shared mut
     try testing.expectEqual(22, next_first.health.current);
 }
 
-test "query iteration and automatic removal require no allocations" {
+test "parts iteration and automatic removal require no allocations" {
     var failing = testing.FailingAllocator.init(testing.allocator, .{});
-    var world = fixtures.GameWorld.init(failing.allocator());
-    defer world.deinit();
+    var store = fixtures.GameStore.init(failing.allocator());
+    defer store.deinit();
 
-    const plane = world.add(fixtures.plane(10));
-    const building = world.add(fixtures.building(20));
+    const plane = store.add(fixtures.plane(10));
+    const building = store.add(fixtures.building(20));
     failing.fail_index = failing.alloc_index;
 
-    var query = world.query(.{ .hp = fixtures.Health });
-    defer query.deinit();
+    var parts = store.parts(.{ .hp = fixtures.Health });
+    defer parts.deinit();
 
     var count: usize = 0;
 
-    while (query.next()) |_| {
-        const id = query.thingId();
-        try testing.expect(world.get(fixtures.Plane, id) != null or world.get(fixtures.Building, id) != null);
+    while (parts.next()) |_| {
+        const id = parts.thingId();
+        try testing.expect(store.get(fixtures.Plane, id) != null or store.get(fixtures.Building, id) != null);
 
-        world.remove(query.thingId());
+        store.remove(parts.thingId());
         count += 1;
     }
 
     try testing.expectEqual(2, count);
 
-    query.deinit();
+    parts.deinit();
 
-    try testing.expectEqual(0, world.pool(fixtures.Plane).len() + world.pool(fixtures.Building).len());
-    try testing.expect(world.get(fixtures.Plane, plane) == null);
-    try testing.expect(world.get(fixtures.Building, building) == null);
+    try testing.expectEqual(0, store.count(fixtures.Plane) + store.count(fixtures.Building));
+    try testing.expect(store.get(fixtures.Plane, plane) == null);
+    try testing.expect(store.get(fixtures.Building, building) == null);
 }
 
 test "removing the current entity twice neither skips rows nor deletes survivors" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const first = world.add(fixtures.plane(0));
-    const survivor = world.add(fixtures.plane(10));
-    const last = world.add(fixtures.plane(-1));
+    const first = store.add(fixtures.plane(0));
+    const survivor = store.add(fixtures.plane(10));
+    const last = store.add(fixtures.plane(-1));
 
-    var query = world.query(.{ .health = fixtures.Health });
-    defer query.deinit();
+    var parts = store.parts(.{ .health = fixtures.Health });
+    defer parts.deinit();
 
     var count: usize = 0;
 
-    while (query.next()) |components| {
+    while (parts.next()) |components| {
         if (components.health.current <= 0) {
-            world.remove(query.thingId());
-            world.remove(query.thingId());
+            store.remove(parts.thingId());
+            store.remove(parts.thingId());
         }
 
         count += 1;
@@ -399,144 +399,144 @@ test "removing the current entity twice neither skips rows nor deletes survivors
 
     try testing.expectEqual(3, count);
 
-    query.deinit();
+    parts.deinit();
 
-    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
-    try testing.expect(world.get(fixtures.Plane, first) == null);
-    try testing.expect(world.get(fixtures.Plane, last) == null);
+    try testing.expectEqual(1, store.count(fixtures.Plane));
+    try testing.expect(store.get(fixtures.Plane, first) == null);
+    try testing.expect(store.get(fixtures.Plane, last) == null);
 
-    const health = (world.get(fixtures.Plane, survivor) orelse return error.MissingEntity).health;
+    const health = (store.get(fixtures.Plane, survivor) orelse return error.MissingEntity).health;
 
     try testing.expectEqual(10, health.current);
 }
 
-test "query aliases can use names also used by iterator methods" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "part aliases can use names also used by iterator methods" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    _ = world.add(fixtures.plane(10));
+    _ = store.add(fixtures.plane(10));
 
-    var query = world.query(.{ .thingId = fixtures.Health, .next = fixtures.Motion });
-    defer query.deinit();
+    var parts = store.parts(.{ .thingId = fixtures.Health, .next = fixtures.Motion });
+    defer parts.deinit();
 
-    const components = query.next() orelse return error.MissingEntity;
+    const components = parts.next() orelse return error.MissingEntity;
     components.thingId.current = 15;
     components.next.x = 25;
 
-    try testing.expect(world.get(fixtures.Plane, query.thingId()) != null);
-    try testing.expectEqual(15, world.pool(fixtures.Plane).components(fixtures.Health)[0].current);
-    try testing.expectEqual(25, world.pool(fixtures.Plane).components(fixtures.Motion)[0].x);
+    try testing.expect(store.get(fixtures.Plane, parts.thingId()) != null);
+    try testing.expectEqual(15, store.get(fixtures.Plane, parts.thingId()).?.health.current);
+    try testing.expectEqual(25, store.get(fixtures.Plane, parts.thingId()).?.motion.x);
 }
 
-test "a pool iterator skips pending rows and cleans up on exhaustion" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "things iteration skips pending rows and cleans up on exhaustion" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const first = world.add(fixtures.plane(10));
-    const skipped = world.add(fixtures.plane(20));
-    const last = world.add(fixtures.plane(30));
-    var iterator = world.pool(fixtures.Plane).iterator();
+    const first = store.add(fixtures.plane(10));
+    const skipped = store.add(fixtures.plane(20));
+    const last = store.add(fixtures.plane(30));
+    var iterator = store.things(fixtures.Plane);
     defer iterator.deinit();
 
     _ = iterator.next() orelse return error.MissingEntity;
     try testing.expectEqualDeep(first, iterator.thingId());
-    world.remove(skipped);
+    store.remove(skipped);
 
     const row = iterator.next() orelse return error.MissingEntity;
     try testing.expectEqualDeep(last, iterator.thingId());
     try testing.expectEqual(30, row.health.current);
     try testing.expect(iterator.next() == null);
-    try testing.expectEqual(2, world.pool(fixtures.Plane).len());
+    try testing.expectEqual(2, store.count(fixtures.Plane));
 
-    _ = world.add(fixtures.plane(40));
+    _ = store.add(fixtures.plane(40));
     iterator.deinit();
-    try testing.expectEqual(3, world.pool(fixtures.Plane).len());
+    try testing.expectEqual(3, store.count(fixtures.Plane));
 }
 
-test "query skips a matching pool whose rows were all removed before visiting" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "parts iteration skips a type whose rows were all removed before visiting" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const plane = world.add(fixtures.plane(10));
-    const building = world.add(fixtures.building(20));
-    var query = world.query(.{ .hp = fixtures.Health });
-    defer query.deinit();
+    const plane = store.add(fixtures.plane(10));
+    const building = store.add(fixtures.building(20));
+    var parts = store.parts(.{ .hp = fixtures.Health });
+    defer parts.deinit();
 
-    world.remove(plane);
-    world.remove(building);
+    store.remove(plane);
+    store.remove(building);
 
-    try testing.expect(query.next() == null);
-    try testing.expectEqual(0, world.pool(fixtures.Plane).len());
-    try testing.expectEqual(0, world.pool(fixtures.Building).len());
+    try testing.expect(parts.next() == null);
+    try testing.expectEqual(0, store.count(fixtures.Plane));
+    try testing.expectEqual(0, store.count(fixtures.Building));
 }
 
 test "breaking an iteration cleans up at the enclosing scope boundary" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const removed = world.add(fixtures.plane(10));
-    _ = world.add(fixtures.plane(20));
+    const removed = store.add(fixtures.plane(10));
+    _ = store.add(fixtures.plane(20));
 
     {
-        var query = world.query(.{ .hp = fixtures.Health });
-        defer query.deinit();
+        var parts = store.parts(.{ .hp = fixtures.Health });
+        defer parts.deinit();
 
-        while (query.next()) |_| {
-            world.remove(query.thingId());
+        while (parts.next()) |_| {
+            store.remove(parts.thingId());
             break;
         }
 
-        try testing.expectEqual(2, world.pool(fixtures.Plane).len());
-        try testing.expect(world.get(fixtures.Plane, removed) == null);
+        try testing.expectEqual(1, store.count(fixtures.Plane));
+        try testing.expect(store.get(fixtures.Plane, removed) == null);
     }
 
-    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
+    try testing.expectEqual(1, store.count(fixtures.Plane));
 }
 
-test "an error return releases a query and applies pending removal" {
+test "an error return releases a parts iterator and applies pending removal" {
     const Operation = struct {
-        fn run(world: *fixtures.GameWorld) !void {
-            var query = world.query(.{ .hp = fixtures.Health });
-            defer query.deinit();
+        fn run(store: *fixtures.GameStore) !void {
+            var parts = store.parts(.{ .hp = fixtures.Health });
+            defer parts.deinit();
 
-            _ = query.next() orelse return error.MissingEntity;
-            world.remove(query.thingId());
+            _ = parts.next() orelse return error.MissingEntity;
+            store.remove(parts.thingId());
             return error.ExpectedExit;
         }
     };
 
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
-    const removed = world.add(fixtures.plane(10));
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
+    const removed = store.add(fixtures.plane(10));
 
-    try testing.expectError(error.ExpectedExit, Operation.run(&world));
-    try testing.expect(world.get(fixtures.Plane, removed) == null);
-    try testing.expectEqual(0, world.pool(fixtures.Plane).len());
+    try testing.expectError(error.ExpectedExit, Operation.run(&store));
+    try testing.expect(store.get(fixtures.Plane, removed) == null);
+    try testing.expectEqual(0, store.count(fixtures.Plane));
 
-    _ = world.add(fixtures.plane(20));
-    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
+    _ = store.add(fixtures.plane(20));
+    try testing.expectEqual(1, store.count(fixtures.Plane));
 }
 
-test "exhausting an inner query preserves the outer cursor until it finishes" {
-    var world = fixtures.GameWorld.init(testing.allocator);
-    defer world.deinit();
+test "exhausting an inner parts iterator preserves the outer cursor until it finishes" {
+    var store = fixtures.GameStore.init(testing.allocator);
+    defer store.deinit();
 
-    const removed = world.add(fixtures.plane(10));
-    const survivor = world.add(fixtures.plane(20));
-    var outer = world.query(.{ .hp = fixtures.Health });
+    const removed = store.add(fixtures.plane(10));
+    const survivor = store.add(fixtures.plane(20));
+    var outer = store.parts(.{ .hp = fixtures.Health });
     defer outer.deinit();
     const row = outer.next() orelse return error.MissingEntity;
 
-    var inner = world.query(.{ .motion = fixtures.Motion });
+    var inner = store.parts(.{ .motion = fixtures.Motion });
     defer inner.deinit();
 
     _ = inner.next() orelse return error.MissingEntity;
-    world.remove(inner.thingId());
+    store.remove(inner.thingId());
 
     _ = inner.next() orelse return error.MissingEntity;
     try testing.expectEqualDeep(survivor, inner.thingId());
     try testing.expect(inner.next() == null);
-    try testing.expectEqual(2, world.pool(fixtures.Plane).len());
+    try testing.expectEqual(1, store.count(fixtures.Plane));
     try testing.expectEqual(10, row.hp.current);
     try testing.expectEqualDeep(removed, outer.thingId());
 
@@ -544,5 +544,5 @@ test "exhausting an inner query preserves the outer cursor until it finishes" {
     try testing.expectEqual(20, next.hp.current);
     try testing.expectEqualDeep(survivor, outer.thingId());
     try testing.expect(outer.next() == null);
-    try testing.expectEqual(1, world.pool(fixtures.Plane).len());
+    try testing.expectEqual(1, store.count(fixtures.Plane));
 }

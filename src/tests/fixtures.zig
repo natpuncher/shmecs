@@ -19,7 +19,7 @@ pub const Bullet = struct {
     appearance: Appearance,
 };
 
-pub const GameWorld = @import("../store.zig").World(.{ Plane, Building, Bullet });
+pub const GameStore = @import("../store.zig").Store(.{ Plane, Building, Bullet });
 
 pub fn plane(value: f32) Plane {
     return .{

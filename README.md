@@ -102,7 +102,7 @@ inside parts still refer to their original targets. Reacquire part pointers afte
 
 - Full iteration closes automatically. Keep `defer iterator.deinit()` for early exits; cleanup on `break` happens when its enclosing scope ends.
 - Adding or reserving a type with active iterators is a programming error. `add`, `reserve`, and `copyFrom` panic on allocation failure.
-- Counts include pending removals until cleanup; iterators skip them immediately.
+- `count` excludes pending removals immediately.
 - Keep IDs for long-lived references; storage growth and removal can invalidate part pointers.
 - Part types within a thing must be unique. Do not copy stores by assignment or copy active iterators.
 
