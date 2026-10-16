@@ -134,6 +134,17 @@ pub fn PoolStorage(comptime Entity: type) type {
             this.removeAt(index);
         }
 
+        pub fn clear(this: *This) void {
+            if (this.active_iterators == 0) {
+                this.removeAll();
+                return;
+            }
+
+            @memset(this.removal_flags[0..this.len], true);
+            this.pending_removals = this.len;
+            this.removal_end = this.len;
+        }
+
         pub fn components(this: *This, comptime Component: type) []Component {
             const index = comptime schema.fieldIndex(Entity, Component);
             return this.columns[index][0..this.len];

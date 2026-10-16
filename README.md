@@ -57,6 +57,10 @@ immediately when its storage is free, or defers physical removal until the last 
 finishes. Removed things disappear from iterators and `get` immediately; repeated
 removal is harmless. No manual flush is needed.
 
+`store.clear(Bullet)` removes all things of one type using the same removal rules,
+invalidates their IDs, and keeps allocated capacity for reuse.
+`store.clearAll()` does this for every type. `store.deinit()` frees the allocations.
+
 `things` exposes `.len`, the stored row count when the iterator opens.
 Use `store.count(Plane)` for the current count without opening an iterator,
 and `store.reserve(Plane, capacity)` to preallocate storage.

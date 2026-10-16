@@ -92,6 +92,14 @@ pub fn Store(comptime thing_types: anytype) type {
             }
         }
 
+        pub fn clear(this: *This, comptime Thing: type) void {
+            this.storageFor(Thing).clear();
+        }
+
+        pub fn clearAll(this: *This) void {
+            inline for (thing_types, 0..) |_, index| this.pools[index].clear();
+        }
+
         fn storageFor(this: *This, comptime Thing: type) *PoolStorage(Thing) {
             const index = comptime schema.typeIndex(thing_types, Thing);
             return &this.pools[index];
